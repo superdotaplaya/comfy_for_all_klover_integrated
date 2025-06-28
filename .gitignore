@@ -162,3 +162,6 @@ job_client.log
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+#Klover Stuff
+/Klover_Integrated/config.py
