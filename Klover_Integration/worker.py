@@ -64,6 +64,7 @@ def get_job():
                 for hash in hashes:
                     if hash[0] == request_info[7]:
                         model = hash[1]
+                job_id = request_info[0]
                 prompt = request_info[5]
                 steps= request_info[8]
                 model = request_info[7]
@@ -76,7 +77,7 @@ def get_job():
                 cfg_scale = request_info[13]
                 print(prompt)
                 if job_type in ["generate", "generate chat"] and "FLUX" not in job_type:
-                    generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, batch_size, cfg_scale, steps)
+                    generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, batch_size, cfg_scale, steps, job_id)
                     submit_results()
             else:
                 print(f"Error fetching job: {response.status_code}")
@@ -87,8 +88,8 @@ def get_job():
 
 
 
-def submit_results(images,channel_id):
-    url = f'http://192.168.5.199:5000/api/upload?channel={channel_id}'
+def submit_results(images,channel_id,job_id):
+    url = f'http://192.168.5.199:5000/api/upload?channel={channel_id}&job_id={job_id}'
 
 
     files = images
@@ -136,7 +137,7 @@ def get_newest_files(directory, count=1):
     
     # Return the specified number of newest files
     return files[:count]
-def generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, batch_size, cfg_scale, steps):
+def generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, batch_size, cfg_scale, steps, job_id):
     height = int(resolution.lower().split("x")[1])
     width = int(resolution.lower().split("x")[0])
     if height > 1536:
