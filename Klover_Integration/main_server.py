@@ -1,13 +1,18 @@
 import requests
 import json
-import os,time,sys
+import os,time,sys,threading
 import mysql.connector
 from mysql.connector import Error
 from datetime import datetime
+import discord
+from discord.ext import commands, tasks
+from discord.commands import Option
+import asyncio
 
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
+bot = discord.Bot()
 if not os.path.isfile("config.py"):
     sys.exit("'config.py' not found! Please add it and try again.")
 else:
@@ -66,7 +71,9 @@ def get_job():
     }
     print(result)
     return jsonify(result)
-
+async def upload_to_discord(files, channel):
+    print("sending to discord")
+    await bot.get_channel(1366919874194178108).send(files=files)
 @app.route('/api/upload', methods=['POST'])
 def upload_images():
     channel = request.args.get('channel')
@@ -76,17 +83,27 @@ def upload_images():
 
     files = request.files.getlist('images')
     saved_files = []
+    upload_files = []
     i = 0
     for file in files:
         if file.filename:
             file.save(f'uploads/{channel}_{i}.png')
             saved_files.append(file.filename)
+            upload_files.append(discord.File(f'uploads/{channel}_{i}.png'))
             i += 1
+    
     mycursor.execute("""DELETE FROM requests WHERE job_id = %s""",(int(job_id),))
     mydb.commit()
+    asyncio.run_coroutine_threadsafe(upload_to_discord(upload_files,channel),bot.loop)
     return jsonify({"status": "success", "message": "Images uploaded"})
 
+@bot.event
+async def on_ready():
+    print(f"🤖 Bot logged in as {bot.user}")
+def run_flask():
+    app.run(host='0.0.0.0', port=5000, debug=False)
 
+threading.Thread(target=run_flask, daemon=True).start()
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+# 2) run the bot
+bot.run(config.discord_token)
