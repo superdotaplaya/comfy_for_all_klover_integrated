@@ -3,6 +3,7 @@ import json
 import os,time,sys
 import mysql.connector
 from mysql.connector import Error
+from datetime import datetime
 
 from flask import Flask, request, jsonify
 
@@ -21,9 +22,16 @@ mydb = mysql.connector.connect(
 mycursor = mydb.cursor()
 @app.route('/api/get-job', methods=['GET'])
 def get_job():
-    mycursor.execute("SELECT * FROM requests LIMIT 1")
+    mycursor.execute("""
+                        SELECT * FROM requests
+                        WHERE started_at IS NULL
+                        ORDER BY job_id ASC
+                        LIMIT 1;
+                    """)
     row = mycursor.fetchone()
-
+    job_id = row[0]
+    now = datetime.now()
+    mycursor.execute("""UPDATE requests SET started_at = %s WHERE job_id = %s""", (now, job_id))
     return jsonify(row)
 
 @app.route('/api/upload', methods=['POST'])
