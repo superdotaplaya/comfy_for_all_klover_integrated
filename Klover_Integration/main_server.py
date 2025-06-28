@@ -31,12 +31,14 @@ def get_job():
     row = mycursor.fetchone()
     job_id = row[0]
     now = datetime.now()
+    mydb.commit()
     mycursor.execute("""UPDATE requests SET started_at = %s WHERE job_id = %s""", (now, job_id))
     return jsonify(row)
 
 @app.route('/api/upload', methods=['POST'])
 def upload_images():
     channel = request.args.get('channel')
+    job_id = request.args.get('job_id')
     if 'images' not in request.files:
         return jsonify({"error": "No 'images' field in request"}), 400
 
@@ -48,8 +50,9 @@ def upload_images():
             file.save(f'uploads/{channel}_{i}.png')
             saved_files.append(file.filename)
             i += 1
-
-    return jsonify({"message": "Images uploaded", "files": saved_files})
+    mycursor.execute("""DELETE FROM requests WHERE job_id = %s""",(int(job_id),))
+    mydb.commit()
+    return jsonify({"status": "success", "message": "Images uploaded"})
 
 
 

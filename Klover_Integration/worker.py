@@ -54,37 +54,37 @@ for fname in os.listdir(forge_model_directory):
         add_file_hash_if_new(full_path)
 print("-- Checkpoint Hashing Completed! --")
 def get_job():
-    try:
-        response = requests.get('http://192.168.5.199:5000/api/get-job')
-        if response.status_code == 200:
-            hashes = load_hashes()
-            request_info = response.json()
-            model_hash = request_info[7]
-            if any(entry[0] == model_hash for entry in hashes):
-                for hash in hashes:
-                    if hash[0] == request_info[7]:
-                        model = hash[1]
-                job_id = request_info[0]
-                prompt = request_info[5]
-                steps= request_info[8]
-                model = request_info[7]
-                channel_id = request_info[9]
-                job_type = request_info[3]
-                user_id = request_info[4]
-                neg_prompt = request_info[6]
-                resolution = request_info[11]
-                batch_size = request_info[12]
-                cfg_scale = request_info[13]
-                print(prompt)
-                if job_type in ["generate", "generate chat"] and "FLUX" not in job_type:
-                    generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, batch_size, cfg_scale, steps, job_id)
-                    submit_results()
-            else:
-                print(f"Error fetching job: {response.status_code}")
-                get_job()
-    except requests.RequestException as e:
+    """try:"""
+    response = requests.get('http://192.168.5.199:5000/api/get-job')
+    if response.status_code == 200:
+        hashes = load_hashes()
+        request_info = response.json()
+        model_hash = request_info[7]
+        if any(entry[0] == model_hash for entry in hashes):
+            for hash in hashes:
+                if hash[0] == request_info[7]:
+                    model = hash[1]
+            job_id = request_info[0]
+            prompt = request_info[5]
+            steps= request_info[8]
+            model = request_info[7]
+            channel_id = request_info[9]
+            job_type = request_info[3]
+            user_id = request_info[4]
+            neg_prompt = request_info[6]
+            resolution = request_info[11]
+            batch_size = request_info[12]
+            cfg_scale = request_info[13]
+            print(prompt)
+            if job_type in ["generate", "generate chat"] and "FLUX" not in job_type:
+                generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, batch_size, cfg_scale, steps, job_id)
+                submit_results()
+        else:
+            print(f"Error fetching job: {response.status_code}")
+            get_job()
+    """except requests.RequestException as e:
         print(f"Request failed: {e}")
-        get_job()
+        get_job()"""
 
 
 
@@ -102,7 +102,7 @@ def submit_results(images,channel_id,job_id):
 
     for _, (_, file, _) in images:
         file.close()
-
+    
     get_job()
 
 
@@ -232,7 +232,7 @@ def generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, 
     for image in images_raw:
         file = open(image, 'rb')
         images.append(('images', (os.path.basename(image), file, 'image/png')))
-    submit_results(images,channel_id)
+    submit_results(images,channel_id, job_id)
 
 
 # Start the first execution
