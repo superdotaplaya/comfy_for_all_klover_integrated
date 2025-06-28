@@ -18,16 +18,17 @@ if not os.path.isfile("config.py"):
 else:
     import config
 
-mydb = mysql.connector.connect(
+
+
+@app.route('/api/get-job', methods=['GET'])
+def get_job():
+    mydb = mysql.connector.connect(
         host=config.db_host,
         user="root",
         password=config.db_pass,
         database="user_requests"
         )
-mycursor = mydb.cursor()
-
-@app.route('/api/get-job', methods=['GET'])
-def get_job():
+    mycursor = mydb.cursor()
     mycursor.execute("""
         SELECT job_id, requested_prompt, steps, model, channel,
                request_type, image_link, requested_at, started_at,
@@ -76,6 +77,13 @@ async def upload_to_discord(files, channel):
     await bot.get_channel(1366919874194178108).send(files=files)
 @app.route('/api/upload', methods=['POST'])
 def upload_images():
+    mydb = mysql.connector.connect(
+        host=config.db_host,
+        user="root",
+        password=config.db_pass,
+        database="user_requests"
+        )
+    mycursor = mydb.cursor()
     channel = request.args.get('channel')
     job_id = request.args.get('job_id')
     if 'images' not in request.files:
@@ -105,5 +113,31 @@ def run_flask():
 
 threading.Thread(target=run_flask, daemon=True).start()
 
+@bot.slash_command(description = "Generate an AI image")
+async def gen(ctx, prompt: Option(str, "What prompt are you going to use?"), negative_prompt: Option(str, "What negative prompt are you going to use?"), checkpoint: Option(str, "What checkpoint are you going to use?"), batch_size: Option(int,choices=[1,2,3,4,5]), resolution: Option(str, "What size do you want the image to be? (WxH) MAXIMUM is 1536x1536", required = False), config_scale: Option(int, "What CFG scale do you want to use? (Default is 5 for SD and SDXL, 3.5 for FLUX)", default = 5,choices=[1,2,3,4,5,6,7,8,9,10],required=False), steps: Option(int, "How many steps do you want to use? (Default is 25, Max is 35)", default = 25,required=False)):
+    print("added to queue")
+
+"""@bot.slash_command(description = "Generate an AI QR code image")
+async def qrcode(ctx, prompt: Option(str, "What prompt are you going to use?"), qr_code: discord.Attachment):
+    print("qr code added to queue")"""
+
+"""@bot.slash_command(description = "Remove the background from an image")
+async def bgremove(ctx, image: discord.Attachment):
+    print("background removal queued")"""
+
+@bot.slash_command(description = "Download a style for use with the bot")
+async def aidownload(ctx, version_id: Option(str, "Version ID of the checkpoint/lora you would like to download"), type: Option(str, choices=['Checkpoint', 'LorA', "Wan I2V Lora"])):
+    print("downloading")
+
+@bot.slash_command(description = "Generate an AI image")
+async def img2img(ctx, image: Option(discord.Attachment, "What image are you going to face fix?"), prompt: Option(str, "What prompt are you going to use?"), negative_prompt: Option(str, "What negative prompt are you going to use?"), checkpoint: Option(str, "What checkpoint are you going to use?"), resolution: Option(str, "What size do you want the image to be? (WxH) MAXIMUM is 1536x1536", required = True)):
+    print("img2img")
+@bot.slash_command(description = "Get a list of available checkpoints and LorAs that Klover has access to")
+async def models(ctx):
+    print("sharing models")
+
+@bot.slash_command(description = "Download a style for use with the bot")
+async def facefix(ctx, image: Option(discord.Attachment, "What image are you going to face fix?"), prompt: Option(str, "What prompt do you want to run for face fix?"), checkpoint: Option(str, "What checkpoint do you want to sue for face fix? (check /models for a full list!)")):
+    print("face fix")
 # 2) run the bot
 bot.run(config.discord_token)
