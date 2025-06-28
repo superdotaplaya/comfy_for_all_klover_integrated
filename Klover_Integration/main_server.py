@@ -20,20 +20,52 @@ mydb = mysql.connector.connect(
         database="user_requests"
         )
 mycursor = mydb.cursor()
+
 @app.route('/api/get-job', methods=['GET'])
 def get_job():
     mycursor.execute("""
-                        SELECT * FROM requests
-                        WHERE started_at IS NULL
-                        ORDER BY job_id ASC
-                        LIMIT 1;
-                    """)
+        SELECT job_id, requested_prompt, steps, model, channel,
+               request_type, image_link, requested_at, started_at,
+               negative_prompt, resolution, batch_size, config_scale
+          FROM requests
+         WHERE started_at IS NULL
+         ORDER BY job_id ASC
+         LIMIT 1
+    """)
     row = mycursor.fetchone()
-    job_id = row[0]
+    if not row:
+        return jsonify({"error":"no jobs"}), 404
+
+    # unpack into named vars so you never mix up the order later:
+    (job_id, prompt, steps, model_hash, channel_id,
+     job_type, image_link, created_at, started_at,
+     neg_prompt, resolution, batch_size, cfg_scale) = row
+
     now = datetime.now()
+    mycursor.execute(
+        "UPDATE requests SET started_at=%s WHERE job_id=%s",
+        (now, job_id)
+    )
     mydb.commit()
-    mycursor.execute("""UPDATE requests SET started_at = %s WHERE job_id = %s""", (now, job_id))
-    return jsonify(row)
+
+    # build a dict to jsonify
+    result = {
+        "job_id": job_id,
+        "requested_prompt": prompt,
+        "steps": steps,
+        "model": str(model_hash),
+        "channel": channel_id,
+        "request_type": job_type,
+        "image_link": image_link,
+        "requested_at": created_at.isoformat() if created_at else None,
+        "started_at": now.isoformat(),
+        "negative_prompt": neg_prompt,
+        "resolution": resolution,
+        "batch_size": batch_size,
+        "config_scale": int(cfg_scale)
+    }
+    print(result)
+    return jsonify(result)
 
 @app.route('/api/upload', methods=['POST'])
 def upload_images():

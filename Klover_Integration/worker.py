@@ -5,6 +5,9 @@ import pynvml
 import threading
 from datetime import datetime
 import hashlib
+from PIL import Image
+import base64
+import io
 
 idle_time_setting = 30
 polling_interval = 15
@@ -55,33 +58,38 @@ for fname in os.listdir(forge_model_directory):
 print("-- Checkpoint Hashing Completed! --")
 def get_job():
     """try:"""
-    response = requests.get('http://192.168.5.199:5000/api/get-job')
-    if response.status_code == 200:
-        hashes = load_hashes()
-        request_info = response.json()
-        model_hash = request_info[7]
-        if any(entry[0] == model_hash for entry in hashes):
-            for hash in hashes:
-                if hash[0] == request_info[7]:
-                    model = hash[1]
-            job_id = request_info[0]
-            prompt = request_info[5]
-            steps= request_info[8]
-            model = request_info[7]
-            channel_id = request_info[9]
-            job_type = request_info[3]
-            user_id = request_info[4]
-            neg_prompt = request_info[6]
-            resolution = request_info[11]
-            batch_size = request_info[12]
-            cfg_scale = request_info[13]
-            print(prompt)
-            if job_type in ["generate", "generate chat"] and "FLUX" not in job_type:
-                generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, batch_size, cfg_scale, steps, job_id)
-                submit_results()
-        else:
-            print(f"Error fetching job: {response.status_code}")
-            get_job()
+def get_job():
+    resp = requests.get('http://192.168.5.199:5000/api/get-job')
+    if resp.status_code != 200:
+        print("no job or error", resp.status_code)
+        return
+
+    job = resp.json()          # now a dict!
+    job_type   = job['request_type']
+    job_id     = job['job_id']
+    prompt     = job['requested_prompt']
+    channel_id = job['channel']
+    model_hash = job['model']
+    image_link = job.get('image_link')   # only face-fix has this populated
+    steps      = job['steps']
+    neg_prompt = job.get('neg_prompt', "")
+    resolution = job.get('resolution')
+    batch_size = job.get('batch_size')
+    cfg_scale  = job.get('cfg_scale')
+
+    if job_type in ["generate", "generate chat"]:
+        generate_image(
+           channel_id, prompt, model_hash, neg_prompt,
+           resolution, job_type, batch_size,
+           cfg_scale, steps, job_id
+        )
+    elif job_type == "face fix":
+        face_fix_post(
+           image_link, channel_id, model_hash,
+           prompt, job_id
+        )
+    else:
+        print("unknown job_type", job_type)
     """except requests.RequestException as e:
         print(f"Request failed: {e}")
         get_job()"""
@@ -137,16 +145,94 @@ def get_newest_files(directory, count=1):
     
     # Return the specified number of newest files
     return files[:count]
-def generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, batch_size, cfg_scale, steps, job_id):
-    height = int(resolution.lower().split("x")[1])
-    width = int(resolution.lower().split("x")[0])
-    if height > 1536:
-        height = 1536
-    if width > 1536:
-        width = 1536
+
+
+
+
+
+
+def generate_image(channel_id,
+                   prompt,
+                   model,
+                   neg_prompt,
+                   resolution,
+                   job_type,
+                   batch_size,
+                   cfg_scale,
+                   steps,
+                   job_id):
+
+    # 1) Coerce None → sane defaults
+    if cfg_scale is None:
+        cfg_scale = 7.5
+    if neg_prompt is None:
+        neg_prompt = ""
+    if resolution is None:
+        resolution = "512x512"
+
+    # 2) Parse resolution safely
+    try:
+        w, h = resolution.lower().split("x")
+        width  = min(int(w), 1536)
+        height = min(int(h), 1536)
+    except Exception:
+        width, height = 512, 512
+
+    # 3) Build payload
     payload = {
-        "prompt": f"{prompt}",
+        "prompt": prompt,
         "sampler_index": "Euler",
+        "alwayson_scripts": {
+            # … your ADetailer block unchanged …
+        },
+        "scheduler": "Automatic",
+        "steps": steps,
+        "sd_model_checkpoint": model,
+        "batch_size": batch_size,
+        "distilled_cfg_scale": 1,
+        "cfg_scale": cfg_scale,
+        "height": height,
+        "width": width,
+        "filter_nsfw": False,
+        "negative_prompt": neg_prompt,
+        "save_images": True,
+    }
+
+    # 4) Optionally set the model on the WebUI first
+    opts_url = "http://127.0.0.1:7860/sdapi/v1/options"
+    requests.post(opts_url, json={
+        "forge_additional_modules": [],
+        "sd_model_checkpoint": model,
+    })
+
+    # 5) Fire off the txt2img call
+    txt2img_url = "http://127.0.0.1:7860/sdapi/v1/txt2img"
+    r = requests.post(txt2img_url, json=payload)
+    try:
+        result = r.json()
+    except ValueError:
+        raise RuntimeError(f"WebUI returned non-JSON: {r.text}")
+
+    # 6) Grab today’s folder
+    today = datetime.now().strftime("%Y-%m-%d")
+    output_dir = fr"F:\new-forge\webui\outputs\txt2img-images\{today}"
+
+    images = []
+    files = get_newest_files(output_dir, batch_size)  # your helper
+    for path in files:
+        f = open(path, "rb")
+        images.append(("images", (os.path.basename(path), f, "image/png")))
+
+    # 7) Push results back to your API
+    submit_results(images, channel_id, job_id)
+
+def face_fix_post(image_link, channel, checkpoint, prompt, job_id):
+    print(channel)
+
+    payload = {
+        "init_images": [image_link],
+        "prompt": "",
+        "sampler_name": "Euler",
         "alwayson_scripts": {
             "ADetailer": {
             "args": [
@@ -178,7 +264,8 @@ def generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, 
                 "ad_steps": 28,
                 "ad_use_cfg_scale": False,
                 "ad_cfg_scale": 7.0,
-                "ad_use_checkpoint": False,
+                "ad_use_checkpoint": True,
+                "ad_checkpoint": checkpoint,
                 "ad_use_vae": False,
                 "ad_vae": "None",
                 "ad_use_sampler": False,
@@ -197,43 +284,18 @@ def generate_image(channel_id, prompt, model, neg_prompt, resolution, job_type, 
                 }
             ]
             }
-        },
-        "scheduler": "Automatic",
-        "steps": steps,
-        "sd_model_checkpoint": model,
-        "batch_size": batch_size,
-
-        "distilled_cfg_scale": 1,
-        "cfg_scale": cfg_scale,
-        "height": height,
-        "width": width,
-        "filter_nsfw": False,
-        "negative_prompt": f"{neg_prompt}",
-        "save_images": True,
-    }
-    url = "http://127.0.0.1:7860/sdapi/v1/options"
-    data = {
-        "forge_additional_modules": [],
-        "sd_model_checkpoint": model,
         }
-
-    options_response = requests.post(url, json=data)
-
-    response = requests.post(url=f'http://127.0.0.1:7860/sdapi/v1/txt2img', json=payload)
+        }
+    response = requests.post(url=f'http://127.0.0.1:7860/sdapi/v1/img2img', json=payload)
 
     r = response.json()
+    print(r)
+    image = Image.open(io.BytesIO(base64.b64decode(r['images'][0])))
+    image.save('output.png')
+    files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
+    submit_results(files,channel,job_id)
+    os.remove("output.png")
     
-    images = []
-    now = datetime.now()
-    formatted_date = now.strftime(r"%Y-%m-%d")
-    print("Formatted date is:", formatted_date)
-    images_raw = get_newest_files(f"F:\\new-forge\\webui\\outputs\\txt2img-images\\{formatted_date}", batch_size)        
-    
-    for image in images_raw:
-        file = open(image, 'rb')
-        images.append(('images', (os.path.basename(image), file, 'image/png')))
-    submit_results(images,channel_id, job_id)
-
 
 # Start the first execution
 main_loop()
