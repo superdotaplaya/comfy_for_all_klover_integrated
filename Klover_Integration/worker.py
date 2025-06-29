@@ -17,30 +17,32 @@ hashes = {}
 checkpoint_db = 'checkpoints.json'
 forge_model_directory = "F:\\new-forge\\webui\\models\\Stable-diffusion"
 
-
+#HASH CALC AND CHECKING BELOW
+#Load list of all hashes
 def load_hashes():
     if os.path.exists(checkpoint_db):
         with open(checkpoint_db, 'r') as file:
             return json.load(file).get('hashes', [])
     return []
-
+#Convert hash to local systems file name
 def hash_to_model_name(hash):
     hashes = load_hashes()
     for file_hash in hashes:
         if file_hash[0] == hash:
             print(file_hash[1])
             return(file_hash[1])
+#Save all hashes with respective file name in 'checkpoints.json'
 def save_hashes(hashes):
     with open(checkpoint_db, 'w') as file:
         json.dump({'hashes': hashes}, file, indent=4)
-
+#Calculate hashes of all files in given directory
 def hash_file(filepath):
     sha256 = hashlib.sha256()
     with open(filepath, 'rb') as f:
         for chunk in iter(lambda: f.read(4096), b''):
             sha256.update(chunk)
     return sha256.hexdigest()
-
+#Add hash and filename to list if its not already there
 def add_file_hash_if_new(filepath):
     hashes = load_hashes()
     
@@ -56,16 +58,18 @@ def add_file_hash_if_new(filepath):
         print(f"⚠️ Hash for {filename} already exists.")
 
 print("-- Checking Checkpoint Hashes --")
-# 🔍 Hash all safetensors in the directory
+# 🔍 Check all safetensors in the directory
 for fname in os.listdir(forge_model_directory):
     if fname.endswith('.safetensors'):
         full_path = os.path.join(forge_model_directory, fname)
         add_file_hash_if_new(full_path)
 print("-- Checkpoint Hashing Completed! --")
-def get_job():
-    """try:"""
-def get_job():
-    resp = requests.get('https://5d9e-97-119-117-192.ngrok-free.app/api/get-job')
+
+
+
+# JOB PROCESSING BELOW
+def get_job(hashes_list):
+    resp = requests.get('https://52c9-97-119-117-192.ngrok-free.app/api/get-job', json = {'checkpoints': hashes_list})
     if resp.status_code != 200:
         print("no job or error", resp.status_code)
         return
@@ -103,7 +107,7 @@ def get_job():
 
 
 def submit_results(images,channel_id,job_id):
-    url = f'https://5d9e-97-119-117-192.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
+    url = f'https://52c9-97-119-117-192.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
 
 
     files = images
@@ -116,8 +120,11 @@ def submit_results(images,channel_id,job_id):
 
     for _, (_, file, _) in images:
         file.close()
-    
-    get_job()
+    hashes_list = []
+    raw_hashes = load_hashes()
+    for hash in raw_hashes:
+            hashes_list.append(hash[0])
+    get_job(hashes_list)
 
 
 def is_gpu_idle(gpu_id, threshold=10):
@@ -139,7 +146,12 @@ def main_loop():
         gpu_idle_timer -= polling_interval
         print("gpu time remaining until idle: " + str(gpu_idle_timer) + " seconds")
     elif gpu_idle_timer <= 0:
-        get_job()
+        hashes_list = []
+        raw_hashes = load_hashes()
+        for hash in raw_hashes:
+            hashes_list.append(hash[0])
+        print(hashes_list)
+        get_job(hashes_list)
     threading.Timer(polling_interval, main_loop).start()
 
 def get_newest_files(directory, count=1):

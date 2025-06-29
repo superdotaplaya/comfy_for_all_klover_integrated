@@ -23,6 +23,7 @@ else:
 
 @app.route('/api/get-job', methods=['GET'])
 def get_job():
+    i = 0
     mydb = mysql.connector.connect(
         host=config.db_host,
         user="root",
@@ -30,6 +31,8 @@ def get_job():
         database="user_requests"
         )
     mycursor = mydb.cursor()
+    data = request.get_json()
+    checkpoint_list = data.get("checkpoints", [])
     mycursor.execute("""
         SELECT job_id, requested_prompt, steps, model, channel,
                request_type, image_link, requested_at, started_at,
@@ -37,42 +40,48 @@ def get_job():
           FROM requests
          WHERE started_at IS NULL
          ORDER BY job_id ASC
-         LIMIT 1
     """)
-    row = mycursor.fetchone()
-    if not row:
-        return jsonify({"error":"no jobs"}), 404
+    job_list = mycursor.fetchall()
+    for job in job_list:
+        print(job)
+        if not job:
+            return jsonify({"error":"no jobs"}), 404
 
-    # unpack into named vars so you never mix up the order later:
-    (job_id, prompt, steps, model_hash, channel_id,
-     job_type, image_link, created_at, started_at,
-     neg_prompt, resolution, batch_size, cfg_scale) = row
+        # unpack into named vars so you never mix up the order later:
+        (job_id, prompt, steps, model_hash, channel_id,
+        job_type, image_link, created_at, started_at,
+        neg_prompt, resolution, batch_size, cfg_scale) = job
 
-    now = datetime.now()
-    mycursor.execute(
-        "UPDATE requests SET started_at=%s WHERE job_id=%s",
-        (now, job_id)
-    )
-    mydb.commit()
+        now = datetime.now()
+        if model_hash in checkpoint_list:
+            mycursor.execute(
+                "UPDATE requests SET started_at=%s WHERE job_id=%s",
+                (now, job_id)
+            )
+            mydb.commit()
 
-    # build a dict to jsonify
-    result = {
-        "job_id": job_id,
-        "requested_prompt": prompt,
-        "steps": steps,
-        "model": str(model_hash),
-        "channel": channel_id,
-        "request_type": job_type,
-        "image_link": image_link,
-        "requested_at": created_at.isoformat() if created_at else None,
-        "started_at": now.isoformat(),
-        "negative_prompt": neg_prompt,
-        "resolution": resolution,
-        "batch_size": batch_size,
-        "config_scale": int(cfg_scale)
-    }
-    print(result)
-    return jsonify(result)
+            # build a dict to jsonify
+            result = {
+                "job_id": job_id,
+                "requested_prompt": prompt,
+                "steps": steps,
+                "model": str(model_hash),
+                "channel": channel_id,
+                "request_type": job_type,
+                "image_link": image_link,
+                "requested_at": created_at.isoformat() if created_at else None,
+                "started_at": now.isoformat(),
+                "negative_prompt": neg_prompt,
+                "resolution": resolution,
+                "batch_size": batch_size,
+                "config_scale": int(cfg_scale)
+            }
+            print(result)
+            return jsonify(result)
+        else:
+            i+=1
+    return(jsonify({'status': 'No job found'}))
+    
 async def upload_to_discord(files, channel):
     print("sending to discord")
     await bot.get_channel(1366919874194178108).send(files=files)
