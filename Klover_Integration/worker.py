@@ -24,6 +24,12 @@ def load_hashes():
             return json.load(file).get('hashes', [])
     return []
 
+def hash_to_model_name(hash):
+    hashes = load_hashes()
+    for file_hash in hashes:
+        if file_hash[0] == hash:
+            print(file_hash[1])
+            return(file_hash[1])
 def save_hashes(hashes):
     with open(checkpoint_db, 'w') as file:
         json.dump({'hashes': hashes}, file, indent=4)
@@ -59,7 +65,7 @@ print("-- Checkpoint Hashing Completed! --")
 def get_job():
     """try:"""
 def get_job():
-    resp = requests.get('http://192.168.5.199:5000/api/get-job')
+    resp = requests.get('https://5d9e-97-119-117-192.ngrok-free.app/api/get-job')
     if resp.status_code != 200:
         print("no job or error", resp.status_code)
         return
@@ -69,7 +75,7 @@ def get_job():
     job_id     = job['job_id']
     prompt     = job['requested_prompt']
     channel_id = job['channel']
-    model_hash = job['model']
+    model_hash = hash_to_model_name(job['model'])
     image_link = job.get('image_link')   # only face-fix has this populated
     steps      = job['steps']
     neg_prompt = job.get('neg_prompt', "")
@@ -97,7 +103,7 @@ def get_job():
 
 
 def submit_results(images,channel_id,job_id):
-    url = f'http://192.168.5.199:5000/api/upload?channel={channel_id}&job_id={job_id}'
+    url = f'https://5d9e-97-119-117-192.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
 
 
     files = images

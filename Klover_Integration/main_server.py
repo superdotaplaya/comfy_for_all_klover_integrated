@@ -7,6 +7,7 @@ from datetime import datetime
 import discord
 from discord.ext import commands, tasks
 from discord.commands import Option
+import ngrok
 import asyncio
 
 from flask import Flask, request, jsonify
@@ -110,6 +111,7 @@ async def on_ready():
     print(f"🤖 Bot logged in as {bot.user}")
 def run_flask():
     app.run(host='0.0.0.0', port=5000, debug=False)
+    
 
 threading.Thread(target=run_flask, daemon=True).start()
 
