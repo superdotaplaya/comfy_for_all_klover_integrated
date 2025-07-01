@@ -16,7 +16,7 @@ gpu_idle_timer = idle_time_setting
 hashes = {}
 checkpoint_db = 'checkpoints.json'
 forge_model_directory = "F:\\new-forge\\webui\\models\\Stable-diffusion"
-
+worker_id = ""
 #HASH CALC AND CHECKING BELOW
 #Load list of all hashes
 def load_hashes():
@@ -65,55 +65,72 @@ for fname in os.listdir(forge_model_directory):
         add_file_hash_if_new(full_path)
 print("-- Checkpoint Hashing Completed! --")
 
-
+def worker_login():
+    global worker_id
+    try:
+        with open("worker_auth.json", "rb") as worker_auth_file:
+            worker_id = json.load(worker_auth_file).get('worker_id')
+            resp = requests.get('https://a674-97-119-117-192.ngrok-free.app/api/init', json = {'worker_id': worker_id})
+            if not resp.json().get("created"):
+                print("logged in")
+    except:
+        resp = requests.get('https://a674-97-119-117-192.ngrok-free.app/api/init', json = {'worker_id': "N/A"})
+        if resp.json().get("created"):
+            worker_id = resp.json().get("worker_id")
+            print(f'user created: {worker_id}')
+            json.dump({'worker_id': worker_id}, open('worker_auth.json', 'w'), indent=4)
 
 # JOB PROCESSING BELOW
 def get_job(hashes_list):
-    resp = requests.get('https://52c9-97-119-117-192.ngrok-free.app/api/get-job', json = {'checkpoints': hashes_list})
-    if resp.status_code != 200:
-        print("no job or error", resp.status_code)
-        return
+    global worker_id
+    try:
+        resp = requests.get('https://a674-97-119-117-192.ngrok-free.app/api/get-job', json = {'checkpoints': hashes_list, 'worker_id':worker_id})
+        if resp.status_code != 200:
+            print("no job or error", resp.status_code)
+            return
 
-    job = resp.json()          # now a dict!
-    job_type   = job['request_type']
-    job_id     = job['job_id']
-    prompt     = job['requested_prompt']
-    channel_id = job['channel']
-    model_hash = hash_to_model_name(job['model'])
-    image_link = job.get('image_link')   # only face-fix has this populated
-    steps      = job['steps']
-    neg_prompt = job.get('neg_prompt', "")
-    resolution = job.get('resolution')
-    batch_size = job.get('batch_size')
-    cfg_scale  = job.get('cfg_scale')
+        job = resp.json()          # now a dict!
+        job_type   = job['request_type']
+        job_id     = job['job_id']
+        prompt     = job['requested_prompt']
+        channel_id = job['channel']
+        model_hash = hash_to_model_name(job['model'])
+        image_link = job.get('image_link')   # only face-fix has this populated
+        steps      = job['steps']
+        neg_prompt = job.get('neg_prompt', "")
+        resolution = job.get('resolution')
+        batch_size = job.get('batch_size')
+        cfg_scale  = job.get('cfg_scale')
 
-    if job_type in ["generate", "generate chat"]:
-        generate_image(
-           channel_id, prompt, model_hash, neg_prompt,
-           resolution, job_type, batch_size,
-           cfg_scale, steps, job_id
-        )
-    elif job_type == "face fix":
-        face_fix_post(
-           image_link, channel_id, model_hash,
-           prompt, job_id
-        )
-    else:
-        print("unknown job_type", job_type)
-    """except requests.RequestException as e:
-        print(f"Request failed: {e}")
-        get_job()"""
-
+        if job_type in ["generate", "generate chat"]:
+            generate_image(
+            channel_id, prompt, model_hash, neg_prompt,
+            resolution, job_type, batch_size,
+            cfg_scale, steps, job_id
+            )
+        elif job_type == "face fix":
+            face_fix_post(
+            image_link, channel_id, model_hash,
+            prompt, job_id
+            )
+        else:
+            print("unknown job_type", job_type)
+        """except requests.RequestException as e:
+            print(f"Request failed: {e}")
+            get_job()"""
+    except:
+        print("No applicable jobs found")
 
 
 def submit_results(images,channel_id,job_id):
-    url = f'https://52c9-97-119-117-192.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
+    global worker_id
+    url = f'https://a674-97-119-117-192.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
 
 
     files = images
 
     try:
-        response = requests.post(url, files=files)
+        response = requests.post('https://a674-97-119-117-192.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}', files=files, data = {'worker_id':worker_id})
         print(response.json())
     except Exception as e:
         print(f"Failed to submit images: {e}")
@@ -362,6 +379,6 @@ def face_fix_post(image_link, channel, checkpoint, prompt, job_id):
     submit_results(files,channel,job_id)
     os.remove("output.png")
     
-
+worker_login()
 # Start the first execution
 main_loop()
