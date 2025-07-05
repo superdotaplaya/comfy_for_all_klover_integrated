@@ -91,10 +91,11 @@ def worker_login():
 # JOB PROCESSING BELOW
 def get_job():
     global worker_id
+    today = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     """ try:"""
     resp = requests.get('https://7690-97-119-124-11.ngrok-free.app/api/get-job', json = {'worker_id':worker_id})
     if resp.status_code != 200:
-        print("No accceptable job found. Status:", resp.status_code)
+        print(f"[{today}] || No accceptable job found. Status:", resp.status_code)
         return
     
     job = resp.json()          # now a dict!
@@ -109,24 +110,23 @@ def get_job():
     resolution = job.get('resolution')
     batch_size = job.get('batch_size')
     cfg_scale  = job.get('config_scale')
-    print(f"Job recieved: \nJob ID: {job_id}\nJob Type: {job_type}\nModel/Checkpoint: {model_hash}")
+    requester = job.get('requester')
+    print(f"[{today}] || Job recieved: \nJob ID: {job_id}\nJob Type: {job_type}\nModel/Checkpoint: {model_hash}")
     if job_type in ["generate", "generate chat"]:
         generate_image(
         channel_id, prompt, model_hash, neg_prompt,
         resolution, job_type, batch_size,
-        cfg_scale, steps, job_id
+        cfg_scale, steps, job_id, requester
         )
     elif job_type == "face fix":
         face_fix_post(
         image_link, channel_id, model_hash,
-        prompt, job_id
+        prompt, job_id, requester
         )
     elif job_type == "upscale":
-        upscale_image(image_link,channel_id,cfg_scale,job_id)
+        upscale_image(image_link,channel_id,cfg_scale,job_id, requester)
     elif job_type == "img2img":
-        img2imggen(image_link,channel_id,model_hash,prompt,neg_prompt,resolution,batch_size, job_id)
-    else:
-        print("unknown job_type", job_type)
+        img2imggen(image_link,channel_id,model_hash,prompt,neg_prompt,resolution,batch_size, job_id, requester)
     """except requests.RequestException as e:
         print(f"Request failed: {e}")
         get_job()"""
@@ -134,7 +134,7 @@ def get_job():
         print("No applicable jobs found")"""
 
 
-def submit_results(images,channel_id,job_id):
+def submit_results(images,channel_id,requester,job_id):
     global worker_id
     url = f'https://7690-97-119-124-11.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
 
@@ -142,7 +142,7 @@ def submit_results(images,channel_id,job_id):
     files = images
 
     try:
-        response = requests.post('https://7690-97-119-124-11.ngrok-free.app/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id})
+        response = requests.post('https://7690-97-119-124-11.ngrok-free.app/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id, 'requester':requester})
         print(response.json())
     except Exception as e:
         print(f"Failed to submit images: {e}")
@@ -154,7 +154,9 @@ def submit_results(images,channel_id,job_id):
     for hash in raw_hashes:
             hashes_list.append(hash[0])
     if response.status_code == 200:
-        print(f"✅ Job ID: {job_id} submitted to server successfully! ✅")
+        print(f"✅ Job ID: {job_id} completed with {len(files)} files submitted to server successfully! ✅")
+    for file in files:
+        os.remove(str(file[1][1]).split("=")[1].replace("'","").replace(">",""))
     get_job()
 
 
@@ -208,7 +210,7 @@ def generate_image(channel_id,
                    batch_size,
                    cfg_scale,
                    steps,
-                   job_id):
+                   job_id, requester):
 
     # 1) Coerce None → sane defaults
     if cfg_scale is None:
@@ -320,9 +322,9 @@ def generate_image(channel_id,
         images.append(("images", (os.path.basename(path), f, "image/png")))
 
     # 7) Push results back to your API
-    submit_results(images, channel_id, job_id)
+    submit_results(images, channel_id, requester,job_id)
 
-def face_fix_post(image_link, channel, checkpoint, prompt, job_id):
+def face_fix_post(image_link, channel, checkpoint, prompt, job_id, requester):
     print(channel)
 
     payload = {
@@ -389,12 +391,12 @@ def face_fix_post(image_link, channel, checkpoint, prompt, job_id):
     image = Image.open(io.BytesIO(base64.b64decode(r['images'][0])))
     image.save('output.png')
     files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
-    submit_results(files,channel,job_id)
+    submit_results(files,channel,requester,job_id)
     os.remove("output.png")
     
 
 
-def upscale_image(image_link,channel,upscale_by,job_id):
+def upscale_image(image_link,channel,upscale_by,job_id, requester):
     payload = {
         "resize_mode": 0,
         "show_extras_results": True,
@@ -418,11 +420,11 @@ def upscale_image(image_link,channel,upscale_by,job_id):
     image = Image.open(io.BytesIO(base64.b64decode(r['image'])))
     image.save('output.png')
     files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
-    submit_results(files,channel,job_id)
+    submit_results(files,channel,requester,job_id)
     os.remove("output.png")
 
 
-def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, resolution, batch_size, job_id):
+def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, resolution, batch_size, job_id, requester):
     payload = {
         "init_images": [image_link],
         "prompt": prompt,
@@ -495,7 +497,7 @@ def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, reso
     image = Image.open(io.BytesIO(base64.b64decode(r['images'][0])))
     image.save('output.png')
     files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
-    submit_results(files,channel_id,job_id)
+    submit_results(files,channel_id,requester,job_id)
     os.remove("output.png")
 worker_login()
 # Start the first execution

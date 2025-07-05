@@ -38,6 +38,8 @@ def load_worker_ids():
 
 @app.route('/api/init', methods=['GET'])
 def login():
+    global worker_hashes
+    global worker_job_types
     worker_id = request.get_json().get("worker_id")
     if  worker_id != "N/A":
         worker_id_list = load_worker_ids()
@@ -52,6 +54,8 @@ def login():
         worker_id = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(24))
         worker_id_list = load_worker_ids()
         worker_id_list.append([worker_id])
+        worker_hashes[worker_id] = request.get_json().get("checkpoints")
+        worker_job_types[worker_id] = request.get_json().get("acceptable_job_types")
         json.dump({'workers': worker_id_list}, open('worker_list.json', 'w'), indent=4)
         return(jsonify({"worker_id": worker_id,"created": True}))
     
@@ -77,7 +81,8 @@ def get_job():
         mycursor.execute("""
             SELECT job_id, requested_prompt, steps, model, channel,
                 request_type, image_link, requested_at, started_at,
-                negative_prompt, resolution, batch_size, config_scale
+                negative_prompt, resolution, batch_size, config_scale,
+                requester
             FROM requests
             WHERE started_at IS NULL
             ORDER BY job_id ASC
@@ -91,7 +96,7 @@ def get_job():
             # unpack into named vars so you never mix up the order later:
             (job_id, prompt, steps, model_hash, channel_id,
             job_type, image_link, created_at, started_at,
-            neg_prompt, resolution, batch_size, cfg_scale) = job
+            neg_prompt, resolution, batch_size, cfg_scale, requester) = job
         print(worker_job_types[worker_id])
         if job_type in worker_job_types[worker_id]:
             now = datetime.now()
@@ -116,7 +121,8 @@ def get_job():
                     "negative_prompt": neg_prompt,
                     "resolution": resolution,
                     "batch_size": batch_size,
-                    "config_scale": int(cfg_scale)
+                    "config_scale": int(cfg_scale),
+                    "requester": requester
                 }
                 print(result)
                 return jsonify(result)
@@ -141,7 +147,8 @@ def get_job():
                     "negative_prompt": neg_prompt,
                     "resolution": resolution,
                     "batch_size": batch_size,
-                    "config_scale": float(cfg_scale)
+                    "config_scale": float(cfg_scale),
+                    "requester": requester
                 }
                 print(result)
                 return jsonify(result)
@@ -154,12 +161,13 @@ def get_job():
     else:
         return(jsonify({'status':'Could not authenticate worker!'}))
     
-async def upload_to_discord(files, channel):
+async def upload_to_discord(files, channel, requester, job_id):
     print("sending to discord")
-    await bot.get_channel(1366919874194178108).send(files=files)
+    await bot.get_channel(1366919874194178108).send(content=f"<@{requester}>\nJob ID: {job_id}",files=files)
 @app.route('/api/upload', methods=['POST'])
 def upload_images():
     if authenticate_worker(request.form.get("worker_id")):
+        requester = request.form.get("requester")
         mydb = mysql.connector.connect(
             host=config.db_host,
             user="root",
@@ -185,7 +193,7 @@ def upload_images():
         
         mycursor.execute("""DELETE FROM requests WHERE job_id = %s""",(int(job_id),))
         mydb.commit()
-        asyncio.run_coroutine_threadsafe(upload_to_discord(upload_files,channel),bot.loop)
+        asyncio.run_coroutine_threadsafe(upload_to_discord(upload_files,channel, requester,job_id),bot.loop)
         return jsonify({"status": "success", "message": "Images uploaded"})
     else:
         return(jsonify({'status':'Could not authenticate worker!'}))
