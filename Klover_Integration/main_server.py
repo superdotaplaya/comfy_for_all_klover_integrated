@@ -15,6 +15,10 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 bot = discord.Bot()
+
+worker_hashes = {}
+worker_job_types = {}
+
 if not os.path.isfile("config.py"):
     sys.exit("'config.py' not found! Please add it and try again.")
 else:
@@ -34,12 +38,16 @@ def load_worker_ids():
 
 @app.route('/api/init', methods=['GET'])
 def login():
-    if request.get_json().get("worker_id") != "N/A":
+    worker_id = request.get_json().get("worker_id")
+    if  worker_id != "N/A":
         worker_id_list = load_worker_ids()
         print(worker_id_list)
-        if authenticate_worker(request.get_json().get("worker_id")):
+        if authenticate_worker(worker_id):
             print("Worker id in list")
-        return(jsonify({"worker_id": request.get_json().get("worker_id"), "created": False}))
+            worker_hashes[worker_id] = request.get_json().get("checkpoints")
+            worker_job_types[worker_id] = request.get_json().get("acceptable_job_types")
+            print(f'WORKER HASHES: {worker_hashes}' )
+        return(jsonify({"worker_id": worker_id, "created": False}))
     elif request.get_json().get("worker_id") == "N/A":
         worker_id = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(24))
         worker_id_list = load_worker_ids()
@@ -52,8 +60,10 @@ def login():
 @app.route('/api/get-job', methods=['GET'])
 
 def get_job():
-    print(authenticate_worker(request.get_json().get("worker_id")))
-    if authenticate_worker(request.get_json().get("worker_id")):
+    global worker_hashes
+    global worker_job_types
+    worker_id = request.get_json().get("worker_id")
+    if authenticate_worker(worker_id):
         i = 0
         mydb = mysql.connector.connect(
             host=config.db_host,
@@ -63,7 +73,7 @@ def get_job():
             )
         mycursor = mydb.cursor()
         data = request.get_json()
-        checkpoint_list = data.get("checkpoints", [])
+        checkpoint_list = worker_hashes[worker_id]
         mycursor.execute("""
             SELECT job_id, requested_prompt, steps, model, channel,
                 request_type, image_link, requested_at, started_at,
@@ -82,7 +92,8 @@ def get_job():
             (job_id, prompt, steps, model_hash, channel_id,
             job_type, image_link, created_at, started_at,
             neg_prompt, resolution, batch_size, cfg_scale) = job
-
+        print(worker_job_types[worker_id])
+        if job_type in worker_job_types[worker_id]:
             now = datetime.now()
             if model_hash in checkpoint_list:
                 mycursor.execute(
@@ -137,6 +148,8 @@ def get_job():
         
             else:
                 i+=1
+        else:
+            i += 1
         return jsonify({'status': 'No job found'}), 404
     else:
         return(jsonify({'status':'Could not authenticate worker!'}))

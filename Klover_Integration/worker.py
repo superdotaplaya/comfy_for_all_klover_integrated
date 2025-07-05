@@ -17,6 +17,9 @@ hashes = {}
 checkpoint_db = 'checkpoints.json'
 forge_model_directory = "F:\\new-forge\\webui\\models\\Stable-diffusion"
 worker_id = ""
+accepted_job_types = ["generate", "facefix", "img2img", "upscale"]
+max_batch_size = 5
+
 #HASH CALC AND CHECKING BELOW
 #Load list of all hashes
 def load_hashes():
@@ -67,41 +70,46 @@ print("-- Checkpoint Hashing Completed! --")
 
 def worker_login():
     global worker_id
+    global accepted_job_types
     try:
         with open("worker_auth.json", "rb") as worker_auth_file:
             worker_id = json.load(worker_auth_file).get('worker_id')
-            resp = requests.get('https://3afd-97-119-117-192.ngrok-free.app/api/init', json = {'worker_id': worker_id})
+            hashes_list = []
+            raw_hashes = load_hashes()
+            for hash in raw_hashes:
+                    hashes_list.append(hash[0])
+            resp = requests.get('https://7690-97-119-124-11.ngrok-free.app/api/init', json = {'worker_id': worker_id, 'checkpoints':hashes_list, 'acceptable_job_types':accepted_job_types})
             if not resp.json().get("created"):
-                print("logged in")
+                print(f"Worker authenticated successfully\nCheckpoint Hashes: {str(len(hashes_list))}\nAcceptable Job Types: {accepted_job_types}")
     except:
-        resp = requests.get('https://3afd-97-119-117-192.ngrok-free.app/api/init', json = {'worker_id': "N/A"})
+        resp = requests.get('https://7690-97-119-124-11.ngrok-free.app/api/init', json = {'worker_id': "N/A"})
         if resp.json().get("created"):
             worker_id = resp.json().get("worker_id")
-            print(f'user created: {worker_id}')
+            print(f'New user created: {worker_id}...')
             json.dump({'worker_id': worker_id}, open('worker_auth.json', 'w'), indent=4)
 
 # JOB PROCESSING BELOW
-def get_job(hashes_list):
+def get_job():
     global worker_id
     """ try:"""
-    resp = requests.get('https://3afd-97-119-117-192.ngrok-free.app/api/get-job', json = {'checkpoints': hashes_list, 'worker_id':worker_id})
+    resp = requests.get('https://7690-97-119-124-11.ngrok-free.app/api/get-job', json = {'worker_id':worker_id})
     if resp.status_code != 200:
-        print("no job or error", resp.status_code)
+        print("No accceptable job found. Status:", resp.status_code)
         return
-
+    
     job = resp.json()          # now a dict!
     job_type   = job['request_type']
     job_id     = job['job_id']
     prompt     = job['requested_prompt']
     channel_id = job['channel']
     model_hash = hash_to_model_name(job['model'])
-    image_link = job.get('image_link')   # only face-fix has this populated
+    image_link = job.get('image_link')   
     steps      = job['steps']
     neg_prompt = job.get('neg_prompt', "")
     resolution = job.get('resolution')
     batch_size = job.get('batch_size')
     cfg_scale  = job.get('config_scale')
-
+    print(f"Job recieved: \nJob ID: {job_id}\nJob Type: {job_type}\nModel/Checkpoint: {model_hash}")
     if job_type in ["generate", "generate chat"]:
         generate_image(
         channel_id, prompt, model_hash, neg_prompt,
@@ -128,13 +136,13 @@ def get_job(hashes_list):
 
 def submit_results(images,channel_id,job_id):
     global worker_id
-    url = f'https://3afd-97-119-117-192.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
+    url = f'https://7690-97-119-124-11.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
 
 
     files = images
 
     try:
-        response = requests.post('https://3afd-97-119-117-192.ngrok-free.app/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id})
+        response = requests.post('https://7690-97-119-124-11.ngrok-free.app/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id})
         print(response.json())
     except Exception as e:
         print(f"Failed to submit images: {e}")
@@ -145,7 +153,9 @@ def submit_results(images,channel_id,job_id):
     raw_hashes = load_hashes()
     for hash in raw_hashes:
             hashes_list.append(hash[0])
-    get_job(hashes_list)
+    if response.status_code == 200:
+        print(f"✅ Job ID: {job_id} submitted to server successfully! ✅")
+    get_job()
 
 
 def is_gpu_idle(gpu_id, threshold=10):
@@ -171,8 +181,7 @@ def main_loop():
         raw_hashes = load_hashes()
         for hash in raw_hashes:
             hashes_list.append(hash[0])
-        print(hashes_list)
-        get_job(hashes_list)
+        get_job()
     threading.Timer(polling_interval, main_loop).start()
 
 def get_newest_files(directory, count=1):
