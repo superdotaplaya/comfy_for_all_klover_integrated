@@ -70,11 +70,11 @@ def worker_login():
     try:
         with open("worker_auth.json", "rb") as worker_auth_file:
             worker_id = json.load(worker_auth_file).get('worker_id')
-            resp = requests.get('https://a674-97-119-117-192.ngrok-free.app/api/init', json = {'worker_id': worker_id})
+            resp = requests.get('https://3afd-97-119-117-192.ngrok-free.app/api/init', json = {'worker_id': worker_id})
             if not resp.json().get("created"):
                 print("logged in")
     except:
-        resp = requests.get('https://a674-97-119-117-192.ngrok-free.app/api/init', json = {'worker_id': "N/A"})
+        resp = requests.get('https://3afd-97-119-117-192.ngrok-free.app/api/init', json = {'worker_id': "N/A"})
         if resp.json().get("created"):
             worker_id = resp.json().get("worker_id")
             print(f'user created: {worker_id}')
@@ -83,54 +83,58 @@ def worker_login():
 # JOB PROCESSING BELOW
 def get_job(hashes_list):
     global worker_id
-    try:
-        resp = requests.get('https://a674-97-119-117-192.ngrok-free.app/api/get-job', json = {'checkpoints': hashes_list, 'worker_id':worker_id})
-        if resp.status_code != 200:
-            print("no job or error", resp.status_code)
-            return
+    """ try:"""
+    resp = requests.get('https://3afd-97-119-117-192.ngrok-free.app/api/get-job', json = {'checkpoints': hashes_list, 'worker_id':worker_id})
+    if resp.status_code != 200:
+        print("no job or error", resp.status_code)
+        return
 
-        job = resp.json()          # now a dict!
-        job_type   = job['request_type']
-        job_id     = job['job_id']
-        prompt     = job['requested_prompt']
-        channel_id = job['channel']
-        model_hash = hash_to_model_name(job['model'])
-        image_link = job.get('image_link')   # only face-fix has this populated
-        steps      = job['steps']
-        neg_prompt = job.get('neg_prompt', "")
-        resolution = job.get('resolution')
-        batch_size = job.get('batch_size')
-        cfg_scale  = job.get('cfg_scale')
+    job = resp.json()          # now a dict!
+    job_type   = job['request_type']
+    job_id     = job['job_id']
+    prompt     = job['requested_prompt']
+    channel_id = job['channel']
+    model_hash = hash_to_model_name(job['model'])
+    image_link = job.get('image_link')   # only face-fix has this populated
+    steps      = job['steps']
+    neg_prompt = job.get('neg_prompt', "")
+    resolution = job.get('resolution')
+    batch_size = job.get('batch_size')
+    cfg_scale  = job.get('config_scale')
 
-        if job_type in ["generate", "generate chat"]:
-            generate_image(
-            channel_id, prompt, model_hash, neg_prompt,
-            resolution, job_type, batch_size,
-            cfg_scale, steps, job_id
-            )
-        elif job_type == "face fix":
-            face_fix_post(
-            image_link, channel_id, model_hash,
-            prompt, job_id
-            )
-        else:
-            print("unknown job_type", job_type)
-        """except requests.RequestException as e:
-            print(f"Request failed: {e}")
-            get_job()"""
-    except:
-        print("No applicable jobs found")
+    if job_type in ["generate", "generate chat"]:
+        generate_image(
+        channel_id, prompt, model_hash, neg_prompt,
+        resolution, job_type, batch_size,
+        cfg_scale, steps, job_id
+        )
+    elif job_type == "face fix":
+        face_fix_post(
+        image_link, channel_id, model_hash,
+        prompt, job_id
+        )
+    elif job_type == "upscale":
+        upscale_image(image_link,channel_id,cfg_scale,job_id)
+    elif job_type == "img2img":
+        img2imggen(image_link,channel_id,model_hash,prompt,neg_prompt,resolution,batch_size, job_id)
+    else:
+        print("unknown job_type", job_type)
+    """except requests.RequestException as e:
+        print(f"Request failed: {e}")
+        get_job()"""
+    """except:
+        print("No applicable jobs found")"""
 
 
 def submit_results(images,channel_id,job_id):
     global worker_id
-    url = f'https://a674-97-119-117-192.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
+    url = f'https://3afd-97-119-117-192.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
 
 
     files = images
 
     try:
-        response = requests.post('https://a674-97-119-117-192.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}', files=files, data = {'worker_id':worker_id})
+        response = requests.post('https://3afd-97-119-117-192.ngrok-free.app/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id})
         print(response.json())
     except Exception as e:
         print(f"Failed to submit images: {e}")
@@ -379,6 +383,111 @@ def face_fix_post(image_link, channel, checkpoint, prompt, job_id):
     submit_results(files,channel,job_id)
     os.remove("output.png")
     
+
+
+def upscale_image(image_link,channel,upscale_by,job_id):
+    payload = {
+        "resize_mode": 0,
+        "show_extras_results": True,
+        "gfpgan_visibility": 0,
+        "codeformer_visibility": 0,
+        "codeformer_weight": 0,
+        "upscaling_resize": upscale_by,
+        "upscaling_resize_w": 3072,
+        "upscaling_resize_h": 3072,
+        "upscaling_crop": True,
+        "upscaler_1": "R-ESRGAN 4x+",
+        "upscaler_2": "None",
+        "extras_upscaler_2_visibility": 0,
+        "upscale_first": False,
+        "image": image_link,
+
+    }
+    response = requests.post(url=f'http://127.0.0.1:7860/sdapi/v1/extra-single-image', json=payload)
+    r = response.json()
+    print(r)
+    image = Image.open(io.BytesIO(base64.b64decode(r['image'])))
+    image.save('output.png')
+    files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
+    submit_results(files,channel,job_id)
+    os.remove("output.png")
+
+
+def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, resolution, batch_size, job_id):
+    payload = {
+        "init_images": [image_link],
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "sampler_name": "Euler",
+        "sd_model_checkpoint": checkpoint,
+        "width": int(resolution.split("x")[0]),
+        "height": int(resolution.split("x")[1]),
+        "batch_size": batch_size,
+        "steps": 25,
+        "cfg_scale": 5,
+        "denoising_strength": 0.75,
+        "alwayson_scripts": {
+            "ADetailer": {
+            "args": [
+                True,
+                False,
+                {
+                "ad_model": "face_yolov8s.pt",
+                "ad_model_classes": "",
+                "ad_tab_enable": True,
+                "ad_prompt": prompt,
+                "ad_negative_prompt": "",
+                "ad_confidence": 0.3,
+                "ad_mask_filter_method": "Area",
+                "ad_mask_k": 0,
+                "ad_mask_min_ratio": 0.0,
+                "ad_mask_max_ratio": 1.0,
+                "ad_dilate_erode": 4,
+                "ad_x_offset": 0,
+                "ad_y_offset": 0,
+                "ad_mask_merge_invert": "None",
+                "ad_mask_blur": 4,
+                "ad_denoising_strength": 0.5,
+                "ad_inpaint_only_masked": True,
+                "ad_inpaint_only_masked_padding": 32,
+                "ad_use_inpaint_width_height": False,
+                "ad_inpaint_width": 512,
+                "ad_inpaint_height": 512,
+                "ad_use_steps": False,
+                "ad_steps": 28,
+                "ad_use_cfg_scale": False,
+                "ad_cfg_scale": 7.0,
+                "ad_use_checkpoint": True,
+                "ad_checkpoint": checkpoint,
+                "ad_use_vae": False,
+                "ad_vae": "None",
+                "ad_use_sampler": False,
+                "ad_sampler": "DPM++ 2M Karras",
+                "ad_scheduler": "Use same scheduler",
+                "ad_use_noise_multiplier": False,
+                "ad_noise_multiplier": 1.0,
+                "ad_use_clip_skip": False,
+                "ad_clip_skip": 1,
+                "ad_restore_face": False,
+                "ad_controlnet_model": "None",
+                "ad_controlnet_module": "None",
+                "ad_controlnet_weight": 1.0,
+                "ad_controlnet_guidance_start": 0.0,
+                "ad_controlnet_guidance_end": 1.0
+                }
+            ]
+            }
+        }
+        }
+    response = requests.post(url=f'http://127.0.0.1:7860/sdapi/v1/img2img', json=payload)
+
+    r = response.json()
+    print(r)
+    image = Image.open(io.BytesIO(base64.b64decode(r['images'][0])))
+    image.save('output.png')
+    files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
+    submit_results(files,channel_id,job_id)
+    os.remove("output.png")
 worker_login()
 # Start the first execution
 main_loop()

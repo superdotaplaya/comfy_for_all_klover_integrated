@@ -109,6 +109,32 @@ def get_job():
                 }
                 print(result)
                 return jsonify(result)
+            elif job_type == "upscale":
+                mycursor.execute(
+                    "UPDATE requests SET started_at=%s WHERE job_id=%s",
+                    (now, job_id)
+                )
+                mydb.commit()
+
+                # build a dict to jsonify
+                result = {
+                    "job_id": job_id,
+                    "requested_prompt": prompt,
+                    "steps": steps,
+                    "model": str(model_hash),
+                    "channel": channel_id,
+                    "request_type": job_type,
+                    "image_link": image_link,
+                    "requested_at": created_at.isoformat() if created_at else None,
+                    "started_at": now.isoformat(),
+                    "negative_prompt": neg_prompt,
+                    "resolution": resolution,
+                    "batch_size": batch_size,
+                    "config_scale": float(cfg_scale)
+                }
+                print(result)
+                return jsonify(result)
+        
             else:
                 i+=1
         return jsonify({'status': 'No job found'}), 404
@@ -128,8 +154,8 @@ def upload_images():
             database="user_requests"
             )
         mycursor = mydb.cursor()
-        channel = request.args.get('channel')
-        job_id = request.args.get('job_id')
+        channel = request.form.get('channel')
+        job_id = request.form.get('job_id')
         if 'images' not in request.files:
             return jsonify({"error": "No 'images' field in request"}), 400
 
@@ -176,14 +202,18 @@ async def aidownload(ctx, version_id: Option(str, "Version ID of the checkpoint/
     print("downloading")
 
 @bot.slash_command(description = "Generate an AI image")
-async def img2img(ctx, image: Option(discord.Attachment, "What image are you going to face fix?"), prompt: Option(str, "What prompt are you going to use?"), negative_prompt: Option(str, "What negative prompt are you going to use?"), checkpoint: Option(str, "What checkpoint are you going to use?"), resolution: Option(str, "What size do you want the image to be? (WxH) MAXIMUM is 1536x1536", required = True)):
+async def img2img(ctx, image: Option(discord.Attachment, "What image are you going to face fix?"), prompt: Option(str, "What prompt are you going to use?"), negative_prompt: Option(str, "What negative prompt are you going to use?"), checkpoint_hash: Option(str, "What checkpoint are you going to use?"), resolution: Option(str, "What size do you want the image to be? (WxH) MAXIMUM is 1536x1536", required = True)):
     print("img2img")
 @bot.slash_command(description = "Get a list of available checkpoints and LorAs that Klover has access to")
 async def models(ctx):
     print("sharing models")
 
 @bot.slash_command(description = "Download a style for use with the bot")
-async def facefix(ctx, image: Option(discord.Attachment, "What image are you going to face fix?"), prompt: Option(str, "What prompt do you want to run for face fix?"), checkpoint: Option(str, "What checkpoint do you want to sue for face fix? (check /models for a full list!)")):
+async def facefix(ctx, image: Option(discord.Attachment, "What image are you going to face fix?"), prompt: Option(str, "What prompt do you want to run for face fix?"), checkpoint_hash: Option(str, "What checkpoint do you want to sue for face fix? (check /models for a full list!)")):
     print("face fix")
+
+@bot.slash_command(description = "Download a style for use with the bot")
+async def upscale(ctx, image: Option(discord.Attachment, "What image are you going to upscale?"), upscale_by: Option(float, choices=[1.5, 2, 2.5, 3, 3.5, 4])):
+    print("upscale")
 # 2) run the bot
 bot.run(config.discord_token)
