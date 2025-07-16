@@ -10,15 +10,18 @@ from discord.commands import Option
 import ngrok
 import asyncio
 import random,string
-
+import pygsheets
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 bot = discord.Bot()
 
 worker_hashes = {}
+lora_hashes = {}
 worker_job_types = {}
 
+gc = pygsheets.authorize(service_file='credentials.json')
+sh = gc.open('Klover_Styles')
 if not os.path.isfile("config.py"):
     sys.exit("'config.py' not found! Please add it and try again.")
 else:
@@ -40,6 +43,7 @@ def load_worker_ids():
 def login():
     global worker_hashes
     global worker_job_types
+    global lora_hashes
     worker_id = request.get_json().get("worker_id")
     if  worker_id != "N/A":
         worker_id_list = load_worker_ids()
@@ -47,8 +51,74 @@ def login():
         if authenticate_worker(worker_id):
             print("Worker id in list")
             worker_hashes[worker_id] = request.get_json().get("checkpoints")
+            lora_hashes[worker_id] = request.get_json().get("loras")
             worker_job_types[worker_id] = request.get_json().get("acceptable_job_types")
             print(f'WORKER HASHES: {worker_hashes}' )
+            print(f"LORA HASHES: {lora_hashes}" )
+
+
+
+        #update checkpoint list to list available models
+            
+            for checkpoint_hash in worker_hashes[worker_id]:
+                print(checkpoint_hash)
+                logged_checkpoints = []
+                try:
+                    wks = sh.worksheet('title','New Checkpoints')
+                    logged_checkpoints = wks.get_values_batch(['D2:D10000'])
+                    filtered_list = [x[0] for x in logged_checkpoints[0] if x[0] != ""]
+                    print(filtered_list)
+                    if checkpoint_hash not in filtered_list:
+                        hash_request = requests.get(f"https://civitai.com/api/v1/model-versions/by-hash/{checkpoint_hash}")
+                        resp_dict = hash_request.json()
+                        wks = sh.worksheet('title','New Checkpoints')
+                        style_id = resp_dict['id']
+                        model_id = resp_dict['modelId']
+                        preview_image_cell = [f'''=IMAGE("{resp_dict['images'][0]['url']}")''']
+                        base_model = [resp_dict['baseModel']]
+                        if resp_dict['images'][0]['nsfwLevel'] >= 5:
+                            nsfw = ["NSFW"]
+                        else:
+                            nsfw = ["SFW"]
+                        model_link = [f'''=HYPERLINK("https://www.civitai.com/models/{str(model_id)}?modelVersionId={style_id}","{resp_dict['model']['name']}")''']
+
+                        wks.append_table(values=[preview_image_cell, model_link,base_model,[checkpoint_hash],nsfw], start="A2", end="D10000", dimension="COLUMNS", overwrite=False)
+                except:
+                    continue
+
+
+            for lora_hash in lora_hashes[worker_id]:
+                print(lora_hash)
+                try:
+                    wks = sh.worksheet('title','New Loras')
+                    logged_loras = wks.get_values_batch(['F2:F10000'])
+                    filtered_list = [x[0] for x in logged_loras[0] if x[0] != ""]
+                    if lora_hash not in filtered_list:
+                        hash_request = requests.get(f"https://civitai.com/api/v1/model-versions/by-hash/{lora_hash}")
+                        resp_dict = hash_request.json()                 
+                        style_id = resp_dict['id']
+                        model_id = resp_dict['modelId']
+                        preview_image_cell = [f'''=IMAGE("{resp_dict['images'][0]['url']}")''']
+                        base_model = [resp_dict['baseModel']]
+                        if resp_dict['images'][0]['nsfwLevel'] >= 5:
+                            nsfw = ["NSFW"]
+                        else:
+                            nsfw = ["SFW"]
+                        try:
+                            trigger_words = resp_dict['trainedWords'][0]
+                        except:
+                            trigger_words = ""
+                        filtered_list = wks.get_values_batch(['D2:D10000'])
+                        model_link = [f'''=HYPERLINK("https://www.civitai.com/models/{str(model_id)}?modelVersionId={style_id}","{resp_dict['model']['name']}")''']
+                        activation = [f"<lora:{lora_hash}:1> {trigger_words}"]
+                        wks.append_table(values=[preview_image_cell,model_link, activation, base_model,nsfw,[lora_hash]], start="A2", end="F10000", dimension="COLUMNS", overwrite=False)
+                except:
+                    continue
+
+
+
+
+
         return(jsonify({"worker_id": worker_id, "created": False}))
     elif request.get_json().get("worker_id") == "N/A":
         worker_id = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(24))

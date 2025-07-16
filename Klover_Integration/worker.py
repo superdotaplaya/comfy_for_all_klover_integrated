@@ -15,16 +15,21 @@ gpu_id_setting = 0
 gpu_idle_timer = idle_time_setting
 hashes = {}
 checkpoint_db = 'checkpoints.json'
-forge_model_directory = "F:\\new-forge\\webui\\models\\Stable-diffusion"
+lora_db = 'loras.json'
+forge_model_directory = "F:\\stable-diffusion-webui-reForge\\models\\Stable-diffusion"
+lora_model_directory = "F:\\stable-diffusion-webui-reForge\\models\\Lora"
 worker_id = ""
 accepted_job_types = ["generate", "facefix", "img2img", "upscale"]
 max_batch_size = 5
 
 #HASH CALC AND CHECKING BELOW
 #Load list of all hashes
-def load_hashes():
-    if os.path.exists(checkpoint_db):
+def load_hashes(type):
+    if os.path.exists(checkpoint_db) and type == "checkpoints":
         with open(checkpoint_db, 'r') as file:
+            return json.load(file).get('hashes', [])
+    elif os.path.exists(lora_db) and type == "loras":
+        with open(lora_db, 'r') as file:
             return json.load(file).get('hashes', [])
     return []
 #Convert hash to local systems file name
@@ -35,9 +40,14 @@ def hash_to_model_name(hash):
             print(file_hash[1])
             return(file_hash[1])
 #Save all hashes with respective file name in 'checkpoints.json'
-def save_hashes(hashes):
-    with open(checkpoint_db, 'w') as file:
-        json.dump({'hashes': hashes}, file, indent=4)
+def save_hashes(hashes, type):
+    if type == "checkpoints":
+        with open(checkpoint_db, 'w') as file:
+            json.dump({'hashes': hashes}, file, indent=4)
+    else:
+        with open(lora_db, 'w') as file:
+            json.dump({'hashes': hashes}, file, indent=4)
+
 #Calculate hashes of all files in given directory
 def hash_file(filepath):
     sha256 = hashlib.sha256()
@@ -46,8 +56,8 @@ def hash_file(filepath):
             sha256.update(chunk)
     return sha256.hexdigest()
 #Add hash and filename to list if its not already there
-def add_file_hash_if_new(filepath):
-    hashes = load_hashes()
+def add_file_hash_if_new(filepath,type):
+    hashes = load_hashes(type)
     
     filename = os.path.basename(filepath)
 
@@ -55,7 +65,7 @@ def add_file_hash_if_new(filepath):
     if not any(entry[1] == filename for entry in hashes):
         file_hash = hash_file(filepath)
         hashes.append([file_hash, filename])
-        save_hashes(hashes)
+        save_hashes(hashes,type)
         print(f"✅ Added new hash for {filename}")
     else:
         print(f"⚠️ Hash for {filename} already exists.")
@@ -65,8 +75,21 @@ print("-- Checking Checkpoint Hashes --")
 for fname in os.listdir(forge_model_directory):
     if fname.endswith('.safetensors'):
         full_path = os.path.join(forge_model_directory, fname)
-        add_file_hash_if_new(full_path)
+        add_file_hash_if_new(full_path,"checkpoints")
 print("-- Checkpoint Hashing Completed! --")
+hashes = {}
+print("-- Checking Lora Hashes --")
+# 🔍 Check all safetensors in the directory
+for fname in os.listdir(lora_model_directory):
+    if fname.endswith('.safetensors'):
+        full_path = os.path.join(lora_model_directory, fname)
+        add_file_hash_if_new(full_path,"loras")
+print("-- Lora Hashing Completed! --")
+
+
+
+
+
 
 def worker_login():
     global worker_id
@@ -74,15 +97,19 @@ def worker_login():
     try:
         with open("worker_auth.json", "rb") as worker_auth_file:
             worker_id = json.load(worker_auth_file).get('worker_id')
-            hashes_list = []
-            raw_hashes = load_hashes()
-            for hash in raw_hashes:
-                    hashes_list.append(hash[0])
-            resp = requests.get('https://7690-97-119-124-11.ngrok-free.app/api/init', json = {'worker_id': worker_id, 'checkpoints':hashes_list, 'acceptable_job_types':accepted_job_types})
+            checkpoint_hashes_list = []
+            lora_hashes_list = []
+            raw_checkpoint_hashes = load_hashes("checkpoints")
+            raw_lora_hashes = load_hashes("loras")
+            for hash in raw_checkpoint_hashes:
+                    checkpoint_hashes_list.append(hash[0])
+            for hash in raw_lora_hashes:
+                    lora_hashes_list.append(hash[0])
+            resp = requests.get('https://240ea314d47b.ngrok-free.app/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list})
             if not resp.json().get("created"):
-                print(f"Worker authenticated successfully\nCheckpoint Hashes: {str(len(hashes_list))}\nAcceptable Job Types: {accepted_job_types}")
+                print(f"Worker authenticated successfully! Acceptable Job Types: {accepted_job_types}")
     except:
-        resp = requests.get('https://7690-97-119-124-11.ngrok-free.app/api/init', json = {'worker_id': "N/A"})
+        resp = requests.get('https://240ea314d47b.ngrok-free.app/api/init', json = {'worker_id': "N/A"})
         if resp.json().get("created"):
             worker_id = resp.json().get("worker_id")
             print(f'New user created: {worker_id}...')
@@ -93,7 +120,7 @@ def get_job():
     global worker_id
     today = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     """ try:"""
-    resp = requests.get('https://7690-97-119-124-11.ngrok-free.app/api/get-job', json = {'worker_id':worker_id})
+    resp = requests.get('https://240ea314d47b.ngrok-free.app/api/get-job', json = {'worker_id':worker_id})
     if resp.status_code != 200:
         print(f"[{today}] || No accceptable job found. Status:", resp.status_code)
         return
@@ -136,23 +163,20 @@ def get_job():
 
 def submit_results(images,channel_id,requester,job_id):
     global worker_id
-    url = f'https://7690-97-119-124-11.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
+    url = f'https://240ea314d47b.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
 
 
     files = images
 
     try:
-        response = requests.post('https://7690-97-119-124-11.ngrok-free.app/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id, 'requester':requester})
+        response = requests.post('https://240ea314d47b.ngrok-free.app/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id, 'requester':requester})
         print(response.json())
     except Exception as e:
         print(f"Failed to submit images: {e}")
 
     for _, (_, file, _) in images:
         file.close()
-    hashes_list = []
-    raw_hashes = load_hashes()
-    for hash in raw_hashes:
-            hashes_list.append(hash[0])
+
     if response.status_code == 200:
         print(f"✅ Job ID: {job_id} completed with {len(files)} files submitted to server successfully! ✅")
     for file in files:
@@ -179,10 +203,6 @@ def main_loop():
         gpu_idle_timer -= polling_interval
         print("gpu time remaining until idle: " + str(gpu_idle_timer) + " seconds")
     elif gpu_idle_timer <= 0:
-        hashes_list = []
-        raw_hashes = load_hashes()
-        for hash in raw_hashes:
-            hashes_list.append(hash[0])
         get_job()
     threading.Timer(polling_interval, main_loop).start()
 
