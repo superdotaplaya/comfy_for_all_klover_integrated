@@ -21,6 +21,7 @@ lora_model_directory = "F:\\stable-diffusion-webui-reForge\\models\\Lora"
 worker_id = ""
 accepted_job_types = ["generate", "facefix", "img2img", "upscale"]
 max_batch_size = 5
+server_url = "https://1846f20d91ff.ngrok-free.app"
 
 #HASH CALC AND CHECKING BELOW
 #Load list of all hashes
@@ -96,6 +97,7 @@ print("-- Lora Hashing Completed! --")
 def worker_login():
     global worker_id
     global accepted_job_types
+    print("🛜🛜 Attempting to login... NOTE: This may take a bit if you have a lot of models installed! 🛜🛜")
     try:
         with open("worker_auth.json", "rb") as worker_auth_file:
             worker_id = json.load(worker_auth_file).get('worker_id')
@@ -107,11 +109,11 @@ def worker_login():
                     checkpoint_hashes_list.append(hash[0])
             for hash in raw_lora_hashes:
                     lora_hashes_list.append(hash[0])
-            resp = requests.get('https://240ea314d47b.ngrok-free.app/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list})
+            resp = requests.get(f'{server_url}/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list})
             if not resp.json().get("created"):
                 print(f"Worker authenticated successfully! Acceptable Job Types: {accepted_job_types}")
     except:
-        resp = requests.get('https://240ea314d47b.ngrok-free.app/api/init', json = {'worker_id': "N/A"})
+        resp = requests.get(f'{server_url}/api/init', json = {'worker_id': "N/A"})
         if resp.json().get("created"):
             worker_id = resp.json().get("worker_id")
             print(f'New user created: {worker_id}...')
@@ -122,7 +124,7 @@ def get_job():
     global worker_id
     today = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     """ try:"""
-    resp = requests.get('https://240ea314d47b.ngrok-free.app/api/get-job', json = {'worker_id':worker_id})
+    resp = requests.get(f'{server_url}/api/get-job', json = {'worker_id':worker_id})
     if resp.status_code != 200:
         print(f"[{today}] || No accceptable job found. Status:", resp.status_code)
         return
@@ -165,13 +167,13 @@ def get_job():
 
 def submit_results(images,channel_id,requester,job_id):
     global worker_id
-    url = f'https://240ea314d47b.ngrok-free.app/api/upload?channel={channel_id}&job_id={job_id}'
+    url = f'{server_url}/api/upload?channel={channel_id}&job_id={job_id}'
 
 
     files = images
 
     try:
-        response = requests.post('https://240ea314d47b.ngrok-free.app/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id, 'requester':requester})
+        response = requests.post(f'{server_url}/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id, 'requester':requester})
         print(response.json())
     except Exception as e:
         print(f"Failed to submit images: {e}")
