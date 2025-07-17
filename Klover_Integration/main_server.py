@@ -51,7 +51,9 @@ def login():
         if authenticate_worker(worker_id):
             print("Worker id in list")
             worker_hashes[worker_id] = request.get_json().get("checkpoints")
+            print(worker_hashes)
             lora_hashes[worker_id] = request.get_json().get("loras")
+            print(lora_hashes)
             worker_job_types[worker_id] = request.get_json().get("acceptable_job_types")
             print(f'WORKER HASHES: {worker_hashes}' )
             print(f"LORA HASHES: {lora_hashes}" )
@@ -59,46 +61,54 @@ def login():
 
 
         #update checkpoint list to list available models
-            
+            logged_checkpoints = []
+            wks = sh.worksheet('title','New Checkpoints')
+            logged_checkpoints = wks.get_values_batch(['D2:D10000'])
+            filtered_list = [x[0] for x in logged_checkpoints[0] if x[0] != ""]
             for checkpoint_hash in worker_hashes[worker_id]:
                 print(checkpoint_hash)
-                logged_checkpoints = []
+                
                 try:
-                    wks = sh.worksheet('title','New Checkpoints')
-                    logged_checkpoints = wks.get_values_batch(['D2:D10000'])
-                    filtered_list = [x[0] for x in logged_checkpoints[0] if x[0] != ""]
-                    print(filtered_list)
                     if checkpoint_hash not in filtered_list:
                         hash_request = requests.get(f"https://civitai.com/api/v1/model-versions/by-hash/{checkpoint_hash}")
                         resp_dict = hash_request.json()
                         wks = sh.worksheet('title','New Checkpoints')
                         style_id = resp_dict['id']
                         model_id = resp_dict['modelId']
-                        preview_image_cell = [f'''=IMAGE("{resp_dict['images'][0]['url']}")''']
+                        preview_image_cell = []
+                        nsfw = ['nsfw']
+                        for image in resp_dict['images']:
+                            if image['url'].endswith('.webp') == False and image['url'].endswith('.mp4') == False:
+                                preview_image_cell = [f'''=IMAGE("{image['url']}")''']
+                                break
+                                if resp_dict['images'][0]['nsfwLevel'] >= 5:
+                                    nsfw = ["NSFW"]
+                                else:
+                                    nsfw = ["SFW"]
                         base_model = [resp_dict['baseModel']]
-                        if resp_dict['images'][0]['nsfwLevel'] >= 5:
-                            nsfw = ["NSFW"]
-                        else:
-                            nsfw = ["SFW"]
+                        
                         model_link = [f'''=HYPERLINK("https://www.civitai.com/models/{str(model_id)}?modelVersionId={style_id}","{resp_dict['model']['name']}")''']
 
                         wks.append_table(values=[preview_image_cell, model_link,base_model,[checkpoint_hash],nsfw], start="A2", end="D10000", dimension="COLUMNS", overwrite=False)
                 except:
                     continue
 
-
+            wks = sh.worksheet('title','New Loras')
+            logged_loras = wks.get_values_batch(['F2:F10000'])
+            filtered_list = [x[0] for x in logged_loras[0] if x[0] != ""]
             for lora_hash in lora_hashes[worker_id]:
                 print(lora_hash)
                 try:
-                    wks = sh.worksheet('title','New Loras')
-                    logged_loras = wks.get_values_batch(['F2:F10000'])
-                    filtered_list = [x[0] for x in logged_loras[0] if x[0] != ""]
                     if lora_hash not in filtered_list:
                         hash_request = requests.get(f"https://civitai.com/api/v1/model-versions/by-hash/{lora_hash}")
                         resp_dict = hash_request.json()                 
                         style_id = resp_dict['id']
                         model_id = resp_dict['modelId']
-                        preview_image_cell = [f'''=IMAGE("{resp_dict['images'][0]['url']}")''']
+                        preview_image_cell = []
+                        for image in resp_dict['images']:
+                            if image['url'].endswith('.webp') == False and image['url'].endswith('.mp4') == False:
+                                preview_image_cell = [f'''=IMAGE("{image['url']}")''']
+                                break
                         base_model = [resp_dict['baseModel']]
                         if resp_dict['images'][0]['nsfwLevel'] >= 5:
                             nsfw = ["NSFW"]
