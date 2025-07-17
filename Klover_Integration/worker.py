@@ -76,7 +76,7 @@ print("-- Checking Checkpoint Hashes --")
 for root, dirs, files in os.walk(forge_model_directory):
     for fname in files:
         if fname.endswith('.safetensors'):
-            full_path = os.path.join(forge_model_directory, fname)
+            full_path = os.path.join(root, fname)
             add_file_hash_if_new(full_path,"checkpoints")
 print("-- Checkpoint Hashing Completed! --")
 hashes = {}
@@ -85,7 +85,7 @@ print("-- Checking Lora Hashes --")
 for root, dirs, files in os.walk(lora_model_directory):
     for fname in files:
         if fname.endswith('.safetensors'):
-            full_path = os.path.join(lora_model_directory, fname)
+            full_path = os.path.join(root, fname)
             add_file_hash_if_new(full_path,"loras")
 print("-- Lora Hashing Completed! --")
 
