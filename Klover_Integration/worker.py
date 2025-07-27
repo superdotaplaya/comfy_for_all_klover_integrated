@@ -8,6 +8,7 @@ import hashlib
 from PIL import Image
 import base64
 import io
+import re
 
 idle_time_setting = 30
 polling_interval = 15
@@ -18,10 +19,13 @@ checkpoint_db = 'checkpoints.json'
 lora_db = 'loras.json'
 forge_model_directory = "F:\\stable-diffusion-webui-reForge\\models\\Stable-diffusion"
 lora_model_directory = "F:\\stable-diffusion-webui-reForge\\models\\Lora"
+civit_api_token = "a69093d8583066a562c575d0f904c3d4"
 worker_id = ""
 accepted_job_types = ["generate", "facefix", "img2img", "upscale"]
 max_batch_size = 5
-server_url = "https://1846f20d91ff.ngrok-free.app"
+server_url = "https://a602beaa5ee4.ngrok-free.app"
+auto_dl_lora = True
+auto_dl_checkpoints = True
 
 #HASH CALC AND CHECKING BELOW
 #Load list of all hashes
@@ -34,8 +38,8 @@ def load_hashes(type):
             return json.load(file).get('hashes', [])
     return []
 #Convert hash to local systems file name
-def hash_to_model_name(hash):
-    hashes = load_hashes()
+def hash_to_model_name(hash,type):
+    hashes = load_hashes(type)
     for file_hash in hashes:
         if file_hash[0] == hash:
             print(file_hash[1])
@@ -70,28 +74,46 @@ def add_file_hash_if_new(filepath,type):
         print(f"✅ Added new hash for {filename}")
     else:
         print(f"⚠️ Hash for {filename} already exists.")
+def check_checkpoint_hashes():
+    global hashes
+    hashes = {}
+    print("-- Checking Checkpoint Hashes --")
+    # 🔍 Check all safetensors in the directory
+    for root, dirs, files in os.walk(forge_model_directory):
+        for fname in files:
+            if fname.endswith('.safetensors'):
+                full_path = os.path.join(root, fname)
+                add_file_hash_if_new(full_path,"checkpoints")
+    print("-- Checkpoint Hashing Completed! --")
 
-print("-- Checking Checkpoint Hashes --")
+
 # 🔍 Check all safetensors in the directory
-for root, dirs, files in os.walk(forge_model_directory):
-    for fname in files:
-        if fname.endswith('.safetensors'):
-            full_path = os.path.join(root, fname)
-            add_file_hash_if_new(full_path,"checkpoints")
-print("-- Checkpoint Hashing Completed! --")
-hashes = {}
-print("-- Checking Lora Hashes --")
-# 🔍 Check all safetensors in the directory
-for root, dirs, files in os.walk(lora_model_directory):
-    for fname in files:
-        if fname.endswith('.safetensors'):
-            full_path = os.path.join(root, fname)
-            add_file_hash_if_new(full_path,"loras")
-print("-- Lora Hashing Completed! --")
+def check_lora_hashes():
+    global hashes
+    hashes = {}
+    print("-- Checking Lora Hashes --")
+
+    for root, dirs, files in os.walk(lora_model_directory):
+        for fname in files:
+            if fname.endswith('.safetensors'):
+                full_path = os.path.join(root, fname)
+                add_file_hash_if_new(full_path,"loras")
+    print("-- Lora Hashing Completed! --")
 
 
-
-
+def lora_conversion(prompt):
+    lora_hashes_list = load_hashes("loras")
+    lora_matches = re.findall(r'<(.*?)>', prompt)
+    lora_hash = ""
+    for lora in lora_matches:
+        lora_string = lora.split(":")
+        lora_hash = lora_string[1]
+        for lora_hash_in_dict in lora_hashes_list:
+            if lora_hash.lower() == lora_hash_in_dict[0]: 
+                prompt = prompt.replace(lora_hash,lora_hash_in_dict[1].replace(".safetensors",""))
+            else:
+                continue
+    return(prompt)
 
 
 def worker_login():
@@ -109,7 +131,7 @@ def worker_login():
                     checkpoint_hashes_list.append(hash[0])
             for hash in raw_lora_hashes:
                     lora_hashes_list.append(hash[0])
-            resp = requests.get(f'{server_url}/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list})
+            resp = requests.get(f'{server_url}/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list, 'dl_lora':auto_dl_lora, 'dl_checkpoint': auto_dl_checkpoints})
             if not resp.json().get("created"):
                 print(f"Worker authenticated successfully! Acceptable Job Types: {accepted_job_types}")
     except:
@@ -122,9 +144,38 @@ def worker_login():
 # JOB PROCESSING BELOW
 def get_job():
     global worker_id
+    global forge_model_directory
     today = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     """ try:"""
     resp = requests.get(f'{server_url}/api/get-job', json = {'worker_id':worker_id})
+    #Download missing checkpoint if job is found to require it
+    if resp.status_code == 201:
+        download_hash = resp.json()['status'].split(': ')[1]
+        print(download_hash)
+        resp = requests.get(f'https://civitai.com/api/v1/model-versions/by-hash/{download_hash}')
+        resp_dict = resp.json()
+        print(resp_dict)
+        style_id = resp_dict['id']
+        url = f"https://civitai.com/api/download/models/{style_id}?token={civit_api_token}"
+        os.system(f"F:/aria2-1.37.0-win-64bit-build1/aria2c.exe -d {forge_model_directory} {url} --conf F:/aria2-1.37.0-win-64bit-build1/config.cfg")
+        resp = requests.post('http://127.0.0.1:7860/sdapi/v1/refresh-checkpoints')
+        check_checkpoint_hashes()
+        worker_login()
+        return
+    if resp.status_code == 202:
+        download_hashes = resp.json()['status'].split(': ')[1].split(',')
+        for missing_hash in download_hashes:
+            print(f'Downloading model: {missing_hash}')
+            resp = requests.get(f'https://civitai.com/api/v1/model-versions/by-hash/{missing_hash}')
+            resp_dict = resp.json()
+            print(resp_dict)
+            style_id = resp_dict['id']
+            url = f"https://civitai.com/api/download/models/{style_id}?token={civit_api_token}"
+            os.system(f"F:/aria2-1.37.0-win-64bit-build1/aria2c.exe -d {lora_model_directory} {url} --conf F:/aria2-1.37.0-win-64bit-build1/config.cfg")
+            resp = requests.post('http://127.0.0.1:7860/sdapi/v1/refresh-loras')
+        check_lora_hashes()
+        worker_login()
+        return
     if resp.status_code != 200:
         print(f"[{today}] || No accceptable job found. Status:", resp.status_code)
         return
@@ -133,8 +184,10 @@ def get_job():
     job_type   = job['request_type']
     job_id     = job['job_id']
     prompt     = job['requested_prompt']
+    prompt = lora_conversion(prompt)
+    print(prompt)
     channel_id = job['channel']
-    model_hash = hash_to_model_name(job['model'])
+    model_hash = hash_to_model_name(job['model'],"checkpoints")
     image_link = job.get('image_link')   
     steps      = job['steps']
     neg_prompt = job.get('neg_prompt', "")
@@ -323,7 +376,6 @@ def generate_image(channel_id,
     # 4) Optionally set the model on the WebUI first
     opts_url = "http://127.0.0.1:7860/sdapi/v1/options"
     requests.post(opts_url, json={
-        "forge_additional_modules": [],
         "sd_model_checkpoint": model,
     })
 
@@ -337,7 +389,7 @@ def generate_image(channel_id,
 
     # 6) Grab today’s folder
     today = datetime.now().strftime("%Y-%m-%d")
-    output_dir = fr"F:\new-forge\webui\outputs\txt2img-images\{today}"
+    output_dir = fr"F:\\stable-diffusion-webui-reForge\\outputs\\txt2img-images\\{today}"
 
     images = []
     files = get_newest_files(output_dir, batch_size)  # your helper
@@ -523,6 +575,10 @@ def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, reso
     files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
     submit_results(files,channel_id,requester,job_id)
     os.remove("output.png")
+
+
+check_checkpoint_hashes()
+check_lora_hashes()
 worker_login()
 # Start the first execution
 main_loop()

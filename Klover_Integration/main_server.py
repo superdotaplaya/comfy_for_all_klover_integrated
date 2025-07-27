@@ -12,12 +12,14 @@ import asyncio
 import random,string
 import pygsheets
 from flask import Flask, request, jsonify
+import re
 
 app = Flask(__name__)
 bot = discord.Bot()
 
 worker_hashes = {}
 lora_hashes = {}
+download_handling = {}
 worker_job_types = {}
 
 gc = pygsheets.authorize(service_file='credentials.json')
@@ -39,97 +41,53 @@ def load_worker_ids():
             return json.load(file).get('workers', [])
     return []
 
+
+def check_for_loras(worker_id, prompt):
+    loras_not_found = []
+    global lora_hashes
+    worker_loras = lora_hashes[worker_id]
+    lora_matches = re.findall(r'<(.*?)>', prompt)
+    print(lora_matches)
+    for lora in lora_matches:
+        lora_string = lora.split(":")
+        lora_hash = lora_string[1].lower()
+        if lora_hash.lower() not in worker_loras:
+            print(f"lora not found: {lora_hash.lower()}")
+            loras_not_found.append(lora_hash.lower())
+    if len(loras_not_found) == 0:
+        return(True, False)
+    else:
+        return(False, loras_not_found)
+        
+
 @app.route('/api/init', methods=['GET'])
 def login():
     global worker_hashes
     global worker_job_types
     global lora_hashes
+    global download_handling
     worker_id = request.get_json().get("worker_id")
     if  worker_id != "N/A":
-        worker_id_list = load_worker_ids()
-        print(worker_id_list)
         if authenticate_worker(worker_id):
             print("Worker id in list")
             worker_hashes[worker_id] = request.get_json().get("checkpoints")
             print(worker_hashes)
             lora_hashes[worker_id] = request.get_json().get("loras")
+            download_handling[worker_id] = {'lora': request.get_json().get("dl_lora"), 'checkpoints':request.get_json().get('dl_checkpoint')}
+            print(download_handling)
             print(lora_hashes)
             worker_job_types[worker_id] = request.get_json().get("acceptable_job_types")
             print(f'WORKER HASHES: {worker_hashes}' )
             print(f"LORA HASHES: {lora_hashes}" )
-
-
-
-        #update checkpoint list to list available models
-            logged_checkpoints = []
-            wks = sh.worksheet('title','New Checkpoints')
-            logged_checkpoints = wks.get_values_batch(['D2:D10000'])
-            filtered_list = [x[0] for x in logged_checkpoints[0] if x[0] != ""]
-            for checkpoint_hash in worker_hashes[worker_id]:
-                print(checkpoint_hash)
-                
-                try:
-                    if checkpoint_hash not in filtered_list:
-                        hash_request = requests.get(f"https://civitai.com/api/v1/model-versions/by-hash/{checkpoint_hash}")
-                        resp_dict = hash_request.json()
-                        wks = sh.worksheet('title','New Checkpoints')
-                        style_id = resp_dict['id']
-                        model_id = resp_dict['modelId']
-                        preview_image_cell = []
-                        nsfw = ['nsfw']
-                        for image in resp_dict['images']:
-                            if image['url'].endswith('.webp') == False and image['url'].endswith('.mp4') == False:
-                                preview_image_cell = [f'''=IMAGE("{image['url']}")''']
-                                break
-                                if resp_dict['images'][0]['nsfwLevel'] >= 5:
-                                    nsfw = ["NSFW"]
-                                else:
-                                    nsfw = ["SFW"]
-                        base_model = [resp_dict['baseModel']]
-                        
-                        model_link = [f'''=HYPERLINK("https://www.civitai.com/models/{str(model_id)}?modelVersionId={style_id}","{resp_dict['model']['name']}")''']
-
-                        wks.append_table(values=[preview_image_cell, model_link,base_model,[checkpoint_hash],nsfw], start="A2", end="D10000", dimension="COLUMNS", overwrite=False)
-                except:
-                    continue
-
-            wks = sh.worksheet('title','New Loras')
-            logged_loras = wks.get_values_batch(['F2:F10000'])
-            filtered_list = [x[0] for x in logged_loras[0] if x[0] != ""]
-            for lora_hash in lora_hashes[worker_id]:
-                print(lora_hash)
-                try:
-                    if lora_hash not in filtered_list:
-                        hash_request = requests.get(f"https://civitai.com/api/v1/model-versions/by-hash/{lora_hash}")
-                        resp_dict = hash_request.json()                 
-                        style_id = resp_dict['id']
-                        model_id = resp_dict['modelId']
-                        preview_image_cell = []
-                        for image in resp_dict['images']:
-                            if image['url'].endswith('.webp') == False and image['url'].endswith('.mp4') == False:
-                                preview_image_cell = [f'''=IMAGE("{image['url']}")''']
-                                break
-                        base_model = [resp_dict['baseModel']]
-                        if resp_dict['images'][0]['nsfwLevel'] >= 5:
-                            nsfw = ["NSFW"]
-                        else:
-                            nsfw = ["SFW"]
-                        try:
-                            trigger_words = resp_dict['trainedWords'][0]
-                        except:
-                            trigger_words = ""
-                        filtered_list = wks.get_values_batch(['D2:D10000'])
-                        model_link = [f'''=HYPERLINK("https://www.civitai.com/models/{str(model_id)}?modelVersionId={style_id}","{resp_dict['model']['name']}")''']
-                        activation = [f"<lora:{lora_hash}:1> {trigger_words}"]
-                        wks.append_table(values=[preview_image_cell,model_link, activation, base_model,nsfw,[lora_hash]], start="A2", end="F10000", dimension="COLUMNS", overwrite=False)
-                except:
-                    continue
+            thread = threading.Thread(target=update_hashes_sheet, args=(worker_hashes[worker_id],lora_hashes[worker_id]))
+            thread.start()
+        
 
 
 
 
 
-        return(jsonify({"worker_id": worker_id, "created": False}))
+            return(jsonify({"worker_id": worker_id, "created": False}))
     elif request.get_json().get("worker_id") == "N/A":
         worker_id = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(24))
         worker_id_list = load_worker_ids()
@@ -139,13 +97,79 @@ def login():
         json.dump({'workers': worker_id_list}, open('worker_list.json', 'w'), indent=4)
         return(jsonify({"worker_id": worker_id,"created": True}))
     
+def update_hashes_sheet(checkpoint_hashes,lora_hashes):
+    logged_checkpoints = []
+    wks = sh.worksheet('title','New Checkpoints')
+    logged_checkpoints = wks.get_values_batch(['D2:D10000'])
+    print(f"logged checkpoints: {logged_checkpoints}")
+    filtered_list = [x[0] for x in logged_checkpoints[0] if x[0] != ""]
+    for checkpoint_hash in checkpoint_hashes:
+        print(checkpoint_hash)
+        try:
+            if checkpoint_hash not in filtered_list:
+                hash_request = requests.get(f"https://civitai.com/api/v1/model-versions/by-hash/{checkpoint_hash}")
+                resp_dict = hash_request.json()
+                wks = sh.worksheet('title','New Checkpoints')
+                style_id = resp_dict['id']
+                model_id = resp_dict['modelId']
+                preview_image_cell = []
+                nsfw = ['nsfw']
+                for image in resp_dict['images']:
+                    if image['url'].endswith('.webp') == False and image['url'].endswith('.mp4') == False:
+                        preview_image_cell = [f'''=IMAGE("{image['url']}")''']
+                        break
+                        if resp_dict['images'][0]['nsfwLevel'] >= 5:
+                            nsfw = ["NSFW"]
+                        else:
+                            nsfw = ["SFW"]
+                base_model = [resp_dict['baseModel']]
+                
+                model_link = [f'''=HYPERLINK("https://www.civitai.com/models/{str(model_id)}?modelVersionId={style_id}","{resp_dict['model']['name']}")''']
 
+                wks.append_table(values=[preview_image_cell, model_link,base_model,[checkpoint_hash],nsfw], start="A2", end="D10000", dimension="COLUMNS", overwrite=False)
+        except Exception as e:
+            print(f"Thread error: {e}")
+            continue
+
+    wks = sh.worksheet('title','New Loras')
+    logged_loras = wks.get_values_batch(['F2:F10000'])
+    filtered_list = [x[0] for x in logged_loras[0] if x[0] != ""]
+    for lora_hash in lora_hashes:
+        print(lora_hash)
+        try:
+            if lora_hash not in filtered_list:
+                hash_request = requests.get(f"https://civitai.com/api/v1/model-versions/by-hash/{lora_hash}")
+                resp_dict = hash_request.json()                 
+                style_id = resp_dict['id']
+                model_id = resp_dict['modelId']
+                preview_image_cell = []
+                for image in resp_dict['images']:
+                    if image['url'].endswith('.webp') == False and image['url'].endswith('.mp4') == False:
+                        preview_image_cell = [f'''=IMAGE("{image['url']}")''']
+                        break
+                base_model = [resp_dict['baseModel']]
+                if resp_dict['images'][0]['nsfwLevel'] >= 5:
+                    nsfw = ["NSFW"]
+                else:
+                    nsfw = ["SFW"]
+                try:
+                    trigger_words = resp_dict['trainedWords'][0]
+                except:
+                    trigger_words = ""
+                filtered_list = wks.get_values_batch(['D2:D10000'])
+                model_link = [f'''=HYPERLINK("https://www.civitai.com/models/{str(model_id)}?modelVersionId={style_id}","{resp_dict['model']['name']}")''']
+                activation = [f"<lora:{lora_hash}:1> {trigger_words}"]
+                wks.append_table(values=[preview_image_cell,model_link, activation, base_model,nsfw,[lora_hash]], start="A2", end="F10000", dimension="COLUMNS", overwrite=False)
+        except Exception as e:
+            print(f"Thread error: {e}")
+            continue
 
 @app.route('/api/get-job', methods=['GET'])
 
 def get_job():
     global worker_hashes
     global worker_job_types
+    global download_handling
     worker_id = request.get_json().get("worker_id")
     if authenticate_worker(worker_id):
         i = 0
@@ -180,7 +204,15 @@ def get_job():
         print(worker_job_types[worker_id])
         if job_type in worker_job_types[worker_id]:
             now = datetime.now()
-            if model_hash in checkpoint_list:
+            print(check_for_loras(worker_id,prompt))
+            print(model_hash in checkpoint_list)
+            print(checkpoint_list)
+            if download_handling[worker_id]['checkpoints'] == True and model_hash.lower() not in checkpoint_list:
+                return jsonify({'status': f'Checkpoint not found: {model_hash}'}), 201
+            lora_check = check_for_loras(worker_id,prompt)
+            if lora_check[0] == False:
+                return jsonify({'status': f'Loras not found: {",".join(map(str,lora_check[1]))}'}), 202
+            if model_hash.lower() in checkpoint_list and check_for_loras(worker_id,prompt)[0] == True:
                 mycursor.execute(
                     "UPDATE requests SET started_at=%s WHERE job_id=%s",
                     (now, job_id)
@@ -192,7 +224,7 @@ def get_job():
                     "job_id": job_id,
                     "requested_prompt": prompt,
                     "steps": steps,
-                    "model": str(model_hash),
+                    "model": str(model_hash).lower(),
                     "channel": channel_id,
                     "request_type": job_type,
                     "image_link": image_link,
@@ -206,6 +238,8 @@ def get_job():
                 }
                 print(result)
                 return jsonify(result)
+
+                
             elif job_type == "upscale":
                 mycursor.execute(
                     "UPDATE requests SET started_at=%s WHERE job_id=%s",
@@ -218,7 +252,7 @@ def get_job():
                     "job_id": job_id,
                     "requested_prompt": prompt,
                     "steps": steps,
-                    "model": str(model_hash),
+                    "model": str(model_hash).lower(),
                     "channel": channel_id,
                     "request_type": job_type,
                     "image_link": image_link,
