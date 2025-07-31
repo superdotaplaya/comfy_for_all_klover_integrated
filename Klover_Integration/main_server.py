@@ -98,6 +98,7 @@ def login():
         return(jsonify({"worker_id": worker_id,"created": True}))
     
 def update_hashes_sheet(checkpoint_hashes,lora_hashes):
+    model_types = ['concept','character','style','clothing','objects','animal','poses', 'background','vehicle']
     logged_checkpoints = []
     wks = sh.worksheet('title','New Checkpoints')
     logged_checkpoints = wks.get_values_batch(['D2:D10000'])
@@ -107,6 +108,7 @@ def update_hashes_sheet(checkpoint_hashes,lora_hashes):
         print(checkpoint_hash)
         try:
             if checkpoint_hash not in filtered_list:
+                model_type = ["N/A"]
                 hash_request = requests.get(f"https://civitai.com/api/v1/model-versions/by-hash/{checkpoint_hash}")
                 resp_dict = hash_request.json()
                 wks = sh.worksheet('title','New Checkpoints')
@@ -132,7 +134,7 @@ def update_hashes_sheet(checkpoint_hashes,lora_hashes):
             continue
 
     wks = sh.worksheet('title','New Loras')
-    logged_loras = wks.get_values_batch(['F2:F10000'])
+    logged_loras = wks.get_values_batch(['G2:G10000'])
     filtered_list = [x[0] for x in logged_loras[0] if x[0] != ""]
     for lora_hash in lora_hashes:
         print(lora_hash)
@@ -142,6 +144,12 @@ def update_hashes_sheet(checkpoint_hashes,lora_hashes):
                 resp_dict = hash_request.json()                 
                 style_id = resp_dict['id']
                 model_id = resp_dict['modelId']
+                tags_request = requests.get(f"https://civitai.com/api/v1/models/{model_id}")
+                model_tags = tags_request.json()['tags']
+                for tag in model_tags:
+                    if tag.lower() in model_types:
+                        model_type = [tag.title()]
+                        break
                 preview_image_cell = []
                 for image in resp_dict['images']:
                     if image['url'].endswith('.webp') == False and image['url'].endswith('.mp4') == False:
@@ -159,7 +167,7 @@ def update_hashes_sheet(checkpoint_hashes,lora_hashes):
                 filtered_list = wks.get_values_batch(['D2:D10000'])
                 model_link = [f'''=HYPERLINK("https://www.civitai.com/models/{str(model_id)}?modelVersionId={style_id}","{resp_dict['model']['name']}")''']
                 activation = [f"<lora:{lora_hash}:1> {trigger_words}"]
-                wks.append_table(values=[preview_image_cell,model_link, activation, base_model,nsfw,[lora_hash]], start="A2", end="F10000", dimension="COLUMNS", overwrite=False)
+                wks.append_table(values=[preview_image_cell,model_link, activation, base_model,model_type,nsfw,[lora_hash]], start="A2", end="G10000", dimension="COLUMNS", overwrite=False)
         except Exception as e:
             print(f"Thread error: {e}")
             continue
