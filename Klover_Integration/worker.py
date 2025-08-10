@@ -9,6 +9,8 @@ from PIL import Image
 import base64
 import io
 import re
+import tkinter as tk
+from tkinter import ttk, messagebox
 
 idle_time_setting = 30
 polling_interval = 15
@@ -19,14 +21,121 @@ checkpoint_db = 'checkpoints.json'
 lora_db = 'loras.json'
 forge_model_directory = "F:\\stable-diffusion-webui-reForge\\models\\Stable-diffusion"
 lora_model_directory = "F:\\stable-diffusion-webui-reForge\\models\\Lora"
-civit_api_token = "a69093d8583066a562c575d0f904c3d4"
+civit_api_token = ""
 worker_id = ""
 accepted_job_types = ["generate", "facefix", "img2img", "upscale"]
 max_batch_size = 5
-server_url = "https://a602beaa5ee4.ngrok-free.app"
+server_url = "https://c3bc6e2471d1.ngrok-free.app"
 auto_dl_lora = True
 auto_dl_checkpoints = True
+output_directory = "F:\\stable-diffusion-webui-reForge\\outputs\\txt2img-images"
 
+def run_app():
+    check_checkpoint_hashes()
+    check_lora_hashes()
+    worker_login()
+    # Start the first execution
+    main_loop()
+def load_user_interface():
+    global forge_model_directory, lora_model_directory, server_url, civit_api_token, auto_dl_lora, auto_dl_checkpoints
+    root = tk.Tk()
+    root.title("Forge SD Worker")
+
+    # Initialize Tkinter variables
+    auto_dl_lora = tk.BooleanVar()
+    auto_dl_checkpoints = tk.BooleanVar()
+
+    # Default values
+    forge_model_directory = ""
+    lora_model_directory = ""
+    server_url = ""
+    civit_api_token = ""
+    output_directory = ""
+
+    # Load config if it exists
+    if os.path.exists("worker_config.json"):
+        try:
+            with open("worker_config.json", "r") as config_file:
+                config = json.load(config_file)
+                forge_model_directory = config.get("forge_model_directory", "")
+                lora_model_directory = config.get("lora_model_directory", "")
+                server_url = config.get("server_url", "")
+                civit_api_token = config.get("civit_api_token", "")
+                auto_dl_lora.set(config.get("auto_dl_lora", False))
+                auto_dl_checkpoints.set(config.get("auto_dl_checkpoints", False))
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load config:\n{e}")
+
+    frm = ttk.Frame(root, padding=10)
+    frm.grid()
+
+    # Labels and Inputs
+    ttk.Label(frm, text="Forge Model Directory:").grid(column=0, row=1, sticky="w")
+    SD_Model_Directory = ttk.Entry(frm, width=100)
+    SD_Model_Directory.insert(0, forge_model_directory)
+    SD_Model_Directory.grid(column=1, row=1)
+
+    ttk.Label(frm, text="Lora Model Directory:").grid(column=0, row=2, sticky="w")
+    Lora_Model_Directory = ttk.Entry(frm, width=100)
+    Lora_Model_Directory.insert(0, lora_model_directory)
+    Lora_Model_Directory.grid(column=1, row=2)
+
+    ttk.Label(frm, text="Server URL:").grid(column=0, row=3, sticky="w")
+    Server_URL = ttk.Entry(frm, width=100)
+    Server_URL.insert(0, server_url)
+    Server_URL.grid(column=1, row=3)
+
+    ttk.Label(frm, text="Civit API Token:").grid(column=0, row=4, sticky="w")
+    Civit_API_Token = ttk.Entry(frm, width=100)
+    Civit_API_Token.insert(0, civit_api_token)
+    Civit_API_Token.grid(column=1, row=4)
+
+    ttk.Label(frm, text="Auto Download Lora:").grid(column=0, row=5, sticky="w")
+    Auto_DL_Lora = ttk.Checkbutton(frm, variable=auto_dl_lora)
+    Auto_DL_Lora.grid(column=1, row=5, sticky="w")
+
+    ttk.Label(frm, text="Auto Download Checkpoints:").grid(column=0, row=6, sticky="w")
+    Auto_DL_Checkpoints = ttk.Checkbutton(frm, variable=auto_dl_checkpoints)
+    Auto_DL_Checkpoints.grid(column=1, row=6, sticky="w")
+
+    # Save button
+    ttk.Button(frm, text="Save Settings", command=lambda: save_settings(
+        SD_Model_Directory.get(),
+        Lora_Model_Directory.get(),
+        Server_URL.get(),
+        Civit_API_Token.get(),
+        auto_dl_lora.get(),
+        auto_dl_checkpoints.get()
+    )).grid(column=1, row=7)
+    forge_model_directory = SD_Model_Directory.get()
+    lora_model_directory = Lora_Model_Directory.get()
+    server_url = Server_URL.get()
+    civit_api_token = Civit_API_Token.get()
+    auto_dl_lora = auto_dl_lora
+    auto_dl_checkpoints = auto_dl_checkpoints
+
+    # Quit button
+    ttk.Button(frm, text="Start Worker!", command=run_app).grid(column=1, row=9)
+    ttk.Button(frm, text="Quit", command=root.destroy).grid(column=1, row=10)
+
+    root.mainloop()
+
+def save_settings(forge_model_dir, lora_model_dir, server, token, dl_lora, dl_checkpoints):
+    config = {
+        "forge_model_directory": forge_model_dir,
+        "lora_model_directory": lora_model_dir,
+        "server_url": server,
+        "civit_api_token": token,
+        "auto_dl_lora": dl_lora,
+        "auto_dl_checkpoints": dl_checkpoints
+    }
+
+    try:
+        with open("worker_config.json", "w") as config_file:
+            json.dump(config, config_file, indent=4)
+        messagebox.showinfo("Success", "Settings saved successfully.")
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to save settings:\n{e}")
 #HASH CALC AND CHECKING BELOW
 #Load list of all hashes
 def load_hashes(type):
@@ -119,6 +228,8 @@ def lora_conversion(prompt):
 def worker_login():
     global worker_id
     global accepted_job_types
+    global auto_dl_lora
+    global auto_dl_checkpoints
     print("🛜🛜 Attempting to login... NOTE: This may take a bit if you have a lot of models installed! 🛜🛜")
     try:
         with open("worker_auth.json", "rb") as worker_auth_file:
@@ -131,10 +242,11 @@ def worker_login():
                     checkpoint_hashes_list.append(hash[0])
             for hash in raw_lora_hashes:
                     lora_hashes_list.append(hash[0])
-            resp = requests.get(f'{server_url}/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list, 'dl_lora':auto_dl_lora, 'dl_checkpoint': auto_dl_checkpoints})
+            resp = requests.get(f'{server_url}/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list, 'dl_lora':auto_dl_lora.get(), 'dl_checkpoint': auto_dl_checkpoints.get()})
             if not resp.json().get("created"):
                 print(f"Worker authenticated successfully! Acceptable Job Types: {accepted_job_types}")
-    except:
+    except Exception as e:
+        print(e)
         resp = requests.get(f'{server_url}/api/init', json = {'worker_id': "N/A"})
         if resp.json().get("created"):
             worker_id = resp.json().get("worker_id")
@@ -288,7 +400,7 @@ def generate_image(channel_id,
                    cfg_scale,
                    steps,
                    job_id, requester):
-
+    global output_directory
     # 1) Coerce None → sane defaults
     if cfg_scale is None:
         cfg_scale = 7.5
@@ -389,7 +501,7 @@ def generate_image(channel_id,
 
     # 6) Grab today’s folder
     today = datetime.now().strftime("%Y-%m-%d")
-    output_dir = fr"F:\\stable-diffusion-webui-reForge\\outputs\\txt2img-images\\{today}"
+    output_dir = fr"{output_directory}\\{today}"
 
     images = []
     files = get_newest_files(output_dir, batch_size)  # your helper
@@ -576,9 +688,4 @@ def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, reso
     submit_results(files,channel_id,requester,job_id)
     os.remove("output.png")
 
-
-check_checkpoint_hashes()
-check_lora_hashes()
-worker_login()
-# Start the first execution
-main_loop()
+load_user_interface()
