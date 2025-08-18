@@ -330,7 +330,7 @@ def get_job():
         print("No applicable jobs found")"""
 
 
-def submit_results(images,channel_id,requester,job_id):
+def submit_results(images,channel_id,requester,job_id,prompt):
     global worker_id
     url = f'{server_url}/api/upload?channel={channel_id}&job_id={job_id}'
 
@@ -338,7 +338,7 @@ def submit_results(images,channel_id,requester,job_id):
     files = images
 
     try:
-        response = requests.post(f'{server_url}/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id, 'requester':requester})
+        response = requests.post(f'{server_url}/api/upload', files=files, data = {'worker_id':worker_id, 'channel':channel_id, 'job_id':job_id, 'requester':requester, 'prompt':prompt})
         print(response.json())
     except Exception as e:
         print(f"Failed to submit images: {e}")
@@ -510,7 +510,7 @@ def generate_image(channel_id,
         images.append(("images", (os.path.basename(path), f, "image/png")))
 
     # 7) Push results back to your API
-    submit_results(images, channel_id, requester,job_id)
+    submit_results(images, channel_id, requester,job_id, prompt)
 
 def face_fix_post(image_link, channel, checkpoint, prompt, job_id, requester):
     print(channel)
@@ -579,7 +579,7 @@ def face_fix_post(image_link, channel, checkpoint, prompt, job_id, requester):
     image = Image.open(io.BytesIO(base64.b64decode(r['images'][0])))
     image.save('output.png')
     files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
-    submit_results(files,channel,requester,job_id)
+    submit_results(files,channel,requester,job_id,prompt)
     os.remove("output.png")
     
 
@@ -608,7 +608,7 @@ def upscale_image(image_link,channel,upscale_by,job_id, requester):
     image = Image.open(io.BytesIO(base64.b64decode(r['image'])))
     image.save('output.png')
     files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
-    submit_results(files,channel,requester,job_id)
+    submit_results(files,channel,requester,job_id,"upscaled image")
     os.remove("output.png")
 
 
@@ -685,7 +685,7 @@ def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, reso
     image = Image.open(io.BytesIO(base64.b64decode(r['images'][0])))
     image.save('output.png')
     files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
-    submit_results(files,channel_id,requester,job_id)
+    submit_results(files,channel_id,requester,job_id,prompt)
     os.remove("output.png")
 
 load_user_interface()

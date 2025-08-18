@@ -194,7 +194,7 @@ def get_job():
             SELECT job_id, requested_prompt, steps, model, channel,
                 request_type, image_link, requested_at, started_at,
                 negative_prompt, resolution, batch_size, config_scale,
-                requester
+                requester, attempts
             FROM requests
             WHERE started_at IS NULL
             ORDER BY job_id ASC
@@ -208,7 +208,7 @@ def get_job():
             # unpack into named vars so you never mix up the order later:
             (job_id, prompt, steps, model_hash, channel_id,
             job_type, image_link, created_at, started_at,
-            neg_prompt, resolution, batch_size, cfg_scale, requester) = job
+            neg_prompt, resolution, batch_size, cfg_scale, requester, attempts) = job
         print(worker_job_types[worker_id])
         if job_type in worker_job_types[worker_id]:
             now = datetime.now()
@@ -222,7 +222,7 @@ def get_job():
                 return jsonify({'status': f'Loras not found: {",".join(map(str,lora_check[1]))}'}), 202
             if model_hash.lower() in checkpoint_list and check_for_loras(worker_id,prompt)[0] == True:
                 mycursor.execute(
-                    "UPDATE requests SET started_at=%s WHERE job_id=%s",
+                    "UPDATE requests SET started_at=%s, attempts = attempts + 1 WHERE job_id=%s",
                     (now, job_id)
                 )
                 mydb.commit()
@@ -283,9 +283,13 @@ def get_job():
     else:
         return(jsonify({'status':'Could not authenticate worker!'}))
     
-async def upload_to_discord(files, channel, requester, job_id):
+async def upload_to_discord(files, channel, requester, job_id, prompt):
     print("sending to discord")
-    await bot.get_channel(1366919874194178108).send(content=f"<@{requester}>\nJob ID: {job_id}",files=files)
+    await bot.get_channel(int(channel)).send(content=f"<@{requester}>\nJob ID: {job_id} \n Prompt: ```{prompt}```",files=files)
+
+async def job_failed_discord_message(channel, requester, job_id):
+    print("sending failure message to discord")
+    await bot.get_channel(int(channel)).send(content=f"<@{requester}>\nJob ID: {job_id} has failed. Please check your request for any errors, if you are unsure what happened, try to resubmit the request.")
 @app.route('/api/upload', methods=['POST'])
 def upload_images():
     if authenticate_worker(request.form.get("worker_id")):
@@ -299,6 +303,7 @@ def upload_images():
         mycursor = mydb.cursor()
         channel = request.form.get('channel')
         job_id = request.form.get('job_id')
+        prompt = request.form.get('prompt')
         if 'images' not in request.files:
             return jsonify({"error": "No 'images' field in request"}), 400
 
@@ -315,7 +320,7 @@ def upload_images():
         
         mycursor.execute("""DELETE FROM requests WHERE job_id = %s""",(int(job_id),))
         mydb.commit()
-        asyncio.run_coroutine_threadsafe(upload_to_discord(upload_files,channel, requester,job_id),bot.loop)
+        asyncio.run_coroutine_threadsafe(upload_to_discord(upload_files,channel, requester,job_id,prompt),bot.loop)
         return jsonify({"status": "success", "message": "Images uploaded"})
     else:
         return(jsonify({'status':'Could not authenticate worker!'}))
@@ -324,9 +329,47 @@ async def on_ready():
     print(f"🤖 Bot logged in as {bot.user}")
 def run_flask():
     app.run(host='0.0.0.0', port=5000, debug=False)
-    
+
+def db_cleanup():
+    print("DB cleanup running")
+    mydb = mysql.connector.connect(
+        host=config.db_host,
+        user="root",
+        password=config.db_pass,
+        database="user_requests"
+        )
+    mycursor = mydb.cursor()
+    query = """
+        UPDATE requests
+        SET started_at = NULL
+        WHERE started_at <= NOW() - INTERVAL 10 MINUTE AND attempts <= 2
+    """
+    mycursor.execute(query)
+    mydb.commit()
+    select_query = "SELECT * FROM requests WHERE attempts >= 3"
+    mycursor.execute(select_query)
+    rows_to_delete = mycursor.fetchall()
+    for rows in rows_to_delete:
+        channel = rows[9]
+        requester = rows[4]
+        job_id = rows[0]
+        asyncio.run_coroutine_threadsafe(job_failed_discord_message(channel, requester, job_id), bot.loop)
+        print(f"Deleting job with ID: {rows[0]} due to too many attempts.")
+    print(f"{mycursor.rowcount} rows updated while checking job status.")
+
+
+
+    delete_query = """
+    DELETE FROM requests
+    WHERE attempts >= 3
+    """
+    mycursor.execute(delete_query)
+    mydb.commit()
+    print(f"{mycursor.rowcount} jobs failed.")
+    threading.Timer(600, db_cleanup).start()
 
 threading.Thread(target=run_flask, daemon=True).start()
+threading.Timer(600, db_cleanup).start()
 
 @bot.slash_command(description = "Generate an AI image")
 async def gen(ctx, prompt: Option(str, "What prompt are you going to use?"), negative_prompt: Option(str, "What negative prompt are you going to use?"), checkpoint_hash: Option(str, "What checkpoint are you going to use?"), batch_size: Option(int,choices=[1,2,3,4,5]), resolution: Option(str, "What size do you want the image to be? (WxH) MAXIMUM is 1536x1536", required = False), config_scale: Option(int, "What CFG scale do you want to use? (Default is 5 for SD and SDXL, 3.5 for FLUX)", default = 5,choices=[1,2,3,4,5,6,7,8,9,10],required=False), steps: Option(int, "How many steps do you want to use? (Default is 25, Max is 35)", default = 25,required=False)):
