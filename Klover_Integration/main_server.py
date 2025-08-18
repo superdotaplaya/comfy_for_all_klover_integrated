@@ -283,9 +283,9 @@ def get_job():
     else:
         return(jsonify({'status':'Could not authenticate worker!'}))
     
-async def upload_to_discord(files, channel, requester, job_id, prompt):
+async def upload_to_discord(files, channel, requester, job_id, prompt, model):
     print("sending to discord")
-    await bot.get_channel(int(channel)).send(content=f"<@{requester}>\nJob ID: {job_id} \n Prompt: ```{prompt}```",files=files)
+    await bot.get_channel(int(channel)).send(content=f"<@{requester}>\nJob ID: {job_id}```{prompt}```Checkpoint/Model: {model}",files=files)
 
 async def job_failed_discord_message(channel, requester, job_id):
     print("sending failure message to discord")
@@ -304,6 +304,7 @@ def upload_images():
         channel = request.form.get('channel')
         job_id = request.form.get('job_id')
         prompt = request.form.get('prompt')
+        model = request.form.get('model')
         if 'images' not in request.files:
             return jsonify({"error": "No 'images' field in request"}), 400
 
@@ -320,7 +321,7 @@ def upload_images():
         
         mycursor.execute("""DELETE FROM requests WHERE job_id = %s""",(int(job_id),))
         mydb.commit()
-        asyncio.run_coroutine_threadsafe(upload_to_discord(upload_files,channel, requester,job_id,prompt),bot.loop)
+        asyncio.run_coroutine_threadsafe(upload_to_discord(upload_files,channel, requester,job_id,prompt, model),bot.loop)
         return jsonify({"status": "success", "message": "Images uploaded"})
     else:
         return(jsonify({'status':'Could not authenticate worker!'}))
