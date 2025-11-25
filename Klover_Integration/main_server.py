@@ -1,13 +1,11 @@
 import requests
 import json
 import os,time,sys,threading
-import mysql.connector
-from mysql.connector import Error
+import pymysql.cursors
 from datetime import datetime
 import discord
 from discord.ext import commands, tasks
 from discord.commands import Option
-import ngrok
 import asyncio
 import random,string
 import pygsheets
@@ -15,7 +13,9 @@ from flask import Flask, request, jsonify
 import re
 
 app = Flask(__name__)
-bot = discord.Bot()
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+bot = discord.Bot(loop=loop)
 
 worker_hashes = {}
 lora_hashes = {}
@@ -28,6 +28,7 @@ if not os.path.isfile("config.py"):
     sys.exit("'config.py' not found! Please add it and try again.")
 else:
     import config
+from werkzeug.utils import secure_filename
 
 def authenticate_worker(worker_id):
     worker_list = load_worker_ids()
@@ -50,10 +51,10 @@ def check_for_loras(worker_id, prompt):
     print(lora_matches)
     for lora in lora_matches:
         lora_string = lora.split(":")
-        lora_hash = lora_string[1].lower()
+        lora_hash = lora_string[1].lower().strip()
         if lora_hash.lower() not in worker_loras:
             print(f"lora not found: {lora_hash.lower()}")
-            loras_not_found.append(lora_hash.lower())
+            loras_not_found.append(lora_hash.lower().strip())
     if len(loras_not_found) == 0:
         return(True, False)
     else:
@@ -69,16 +70,10 @@ def login():
     worker_id = request.get_json().get("worker_id")
     if  worker_id != "N/A":
         if authenticate_worker(worker_id):
-            print("Worker id in list")
             worker_hashes[worker_id] = request.get_json().get("checkpoints")
-            print(worker_hashes)
             lora_hashes[worker_id] = request.get_json().get("loras")
             download_handling[worker_id] = {'lora': request.get_json().get("dl_lora"), 'checkpoints':request.get_json().get('dl_checkpoint')}
-            print(download_handling)
-            print(lora_hashes)
             worker_job_types[worker_id] = request.get_json().get("acceptable_job_types")
-            print(f'WORKER HASHES: {worker_hashes}' )
-            print(f"LORA HASHES: {lora_hashes}" )
             thread = threading.Thread(target=update_hashes_sheet, args=(worker_hashes[worker_id],lora_hashes[worker_id]))
             thread.start()
         
@@ -96,16 +91,31 @@ def login():
         worker_job_types[worker_id] = request.get_json().get("acceptable_job_types")
         json.dump({'workers': worker_id_list}, open('worker_list.json', 'w'), indent=4)
         return(jsonify({"worker_id": worker_id,"created": True}))
-    
+
+def remove_bad_job(requester,job_id,reason,channel):
+    message = ""
+    if reason == "Download Failed":
+        message = f"Job ID {job_id} has failed! \n\n failure reason: Unable to download resource, please double check the model hash, and all lora hashes and their tags! If you believe this is an error on my end, reach out to Shellerman!"
+        mydb = pymysql.connect(
+            host=config.db_host,
+            user="root",
+            password=config.db_pass,
+            database="user_requests"
+        )
+        mycursor = mydb.cursor()
+        mycursor.execute("""DELETE FROM requests WHERE job_id = %s""", (job_id,))
+        mydb.commit()
+        asyncio.run_coroutine_threadsafe(job_failed_discord_message(channel,requester,message),bot.loop)
+    return("Done!")
+
+
 def update_hashes_sheet(checkpoint_hashes,lora_hashes):
     model_types = ['concept','character','style','clothing','objects','animal','poses', 'background','vehicle']
     logged_checkpoints = []
     wks = sh.worksheet('title','New Checkpoints')
     logged_checkpoints = wks.get_values_batch(['D2:D10000'])
-    print(f"logged checkpoints: {logged_checkpoints}")
     filtered_list = [x[0] for x in logged_checkpoints[0] if x[0] != ""]
     for checkpoint_hash in checkpoint_hashes:
-        print(checkpoint_hash)
         try:
             if checkpoint_hash not in filtered_list:
                 model_type = ["N/A"]
@@ -130,14 +140,12 @@ def update_hashes_sheet(checkpoint_hashes,lora_hashes):
 
                 wks.append_table(values=[preview_image_cell, model_link,base_model,[checkpoint_hash],nsfw], start="A2", end="D10000", dimension="COLUMNS", overwrite=False)
         except Exception as e:
-            print(f"Thread error: {e}")
             continue
 
     wks = sh.worksheet('title','New Loras')
     logged_loras = wks.get_values_batch(['G2:G10000'])
     filtered_list = [x[0] for x in logged_loras[0] if x[0] != ""]
     for lora_hash in lora_hashes:
-        print(lora_hash)
         try:
             if lora_hash not in filtered_list:
                 hash_request = requests.get(f"https://civitai.com/api/v1/model-versions/by-hash/{lora_hash}")
@@ -169,65 +177,83 @@ def update_hashes_sheet(checkpoint_hashes,lora_hashes):
                 activation = [f"<lora:{lora_hash}:1> {trigger_words}"]
                 wks.append_table(values=[preview_image_cell,model_link, activation, base_model,model_type,nsfw,[lora_hash]], start="A2", end="G10000", dimension="COLUMNS", overwrite=False)
         except Exception as e:
-            print(f"Thread error: {e}")
             continue
+        
+
+@app.route('/api/download-fail', methods=['GET'])
+def download_failed():
+    data = request.get_json() or {}
+    print(data)
+    if authenticate_worker(data.get('worker_id')):
+        reason = "Download Failed"
+        requester = data.get("requester")
+        job_id = data.get("job_id")
+        channel = data.get("channel")
+        remove_bad_job(requester,job_id,reason,channel)
+        return jsonify({'status': 'Job removed!'}), 500
 
 @app.route('/api/get-job', methods=['GET'])
-
 def get_job():
-    global worker_hashes
-    global worker_job_types
-    global download_handling
-    worker_id = request.get_json().get("worker_id")
-    if authenticate_worker(worker_id):
-        i = 0
-        mydb = mysql.connector.connect(
-            host=config.db_host,
-            user="root",
-            password=config.db_pass,
-            database="user_requests"
-            )
+    data = request.get_json() or {}
+    worker_id = data.get("worker_id")
+
+    if not authenticate_worker(worker_id):
+        return jsonify({'status': 'Could not authenticate worker!'}), 401
+
+    checkpoint_list = worker_hashes.get(worker_id, [])
+    acceptable_types = worker_job_types.get(worker_id, [])
+    download_cfg = download_handling.get(worker_id, {})
+
+    mydb = pymysql.connect(
+        host=config.db_host,
+        user="root",
+        password=config.db_pass,
+        database="user_requests"
+    )
+    try:
         mycursor = mydb.cursor()
-        data = request.get_json()
-        checkpoint_list = worker_hashes[worker_id]
         mycursor.execute("""
             SELECT job_id, requested_prompt, steps, model, channel,
-                request_type, image_link, requested_at, started_at,
-                negative_prompt, resolution, batch_size, config_scale,
-                requester, attempts
+                   request_type, image_link, requested_at, started_at,
+                   negative_prompt, resolution, batch_size, config_scale,
+                   requester, attempts, sampler, clip_skip, face_fix, hires_fix
             FROM requests
             WHERE started_at IS NULL
             ORDER BY job_id ASC
         """)
         job_list = mycursor.fetchall()
-        for job in job_list:
-            print(job)
-            if not job:
-                return jsonify({"error":"no jobs"}), 404
 
-            # unpack into named vars so you never mix up the order later:
+        if not job_list:
+            return jsonify({"error": "no jobs"}), 500
+
+        for job in job_list:
             (job_id, prompt, steps, model_hash, channel_id,
-            job_type, image_link, created_at, started_at,
-            neg_prompt, resolution, batch_size, cfg_scale, requester, attempts) = job
-        print(worker_job_types[worker_id])
-        if job_type in worker_job_types[worker_id]:
+             job_type, image_link, created_at, started_at,
+             neg_prompt, resolution, batch_size, cfg_scale,
+             requester, attempts, sampler, clip_skip, face_fix, hires_fix) = job
+
+            # only consider jobs this worker can run
+            if job_type not in acceptable_types:
+                continue
+
             now = datetime.now()
-            print(check_for_loras(worker_id,prompt))
-            print(model_hash in checkpoint_list)
-            print(checkpoint_list)
-            if download_handling[worker_id]['checkpoints'] == True and model_hash.lower() not in checkpoint_list:
-                return jsonify({'status': f'Checkpoint not found: {model_hash}'}), 201
-            lora_check = check_for_loras(worker_id,prompt)
-            if lora_check[0] == False:
-                return jsonify({'status': f'Loras not found: {",".join(map(str,lora_check[1]))}'}), 202
-            if model_hash.lower() in checkpoint_list and check_for_loras(worker_id,prompt)[0] == True:
+
+            # If worker will auto-download checkpoints and the checkpoint isn't present, notify
+            if download_cfg.get('checkpoints') is True and str(model_hash).lower() not in checkpoint_list and model_hash != None:
+                return jsonify({'status':f'Model not found: {model_hash}', 'job_id': job_id, 'requester':requester, 'channel': channel_id}), 201
+
+            # Check lorAs required by the prompt
+            lora_check = check_for_loras(worker_id, prompt)
+            if lora_check[0] is False:
+                return jsonify({'status':f'Loras not found: {lora_check[1]}', 'job_id': job_id, 'requester':requester, 'channel': channel_id, 'download_loras':lora_check[1]}), 202
+
+            # If model present and lorAs satisfied, claim the job
+            if str(model_hash).lower() in checkpoint_list and lora_check[0] is True:
                 mycursor.execute(
                     "UPDATE requests SET started_at=%s, attempts = attempts + 1 WHERE job_id=%s",
                     (now, job_id)
                 )
                 mydb.commit()
-
-                # build a dict to jsonify
                 result = {
                     "job_id": job_id,
                     "requested_prompt": prompt,
@@ -241,21 +267,22 @@ def get_job():
                     "negative_prompt": neg_prompt,
                     "resolution": resolution,
                     "batch_size": batch_size,
-                    "config_scale": int(cfg_scale),
-                    "requester": requester
+                    "config_scale": int(cfg_scale) if cfg_scale is not None else None,
+                    "requester": requester,
+                    "sampler": sampler,
+                    "clip_skip": clip_skip,
+                    "face_fix": face_fix,
+                    "hires_fix": hires_fix
                 }
-                print(result)
                 return jsonify(result)
 
-                
-            elif job_type == "upscale":
+            # Upscale jobs do not require checkpoint presence
+            if job_type == "upscale":
                 mycursor.execute(
                     "UPDATE requests SET started_at=%s WHERE job_id=%s",
                     (now, job_id)
                 )
                 mydb.commit()
-
-                # build a dict to jsonify
                 result = {
                     "job_id": job_id,
                     "requested_prompt": prompt,
@@ -269,62 +296,106 @@ def get_job():
                     "negative_prompt": neg_prompt,
                     "resolution": resolution,
                     "batch_size": batch_size,
-                    "config_scale": float(cfg_scale),
+                    "config_scale": float(cfg_scale) if cfg_scale is not None else None,
                     "requester": requester
                 }
-                print(result)
                 return jsonify(result)
-        
-            else:
-                i+=1
-        else:
-            i += 1
-        return jsonify({'status': 'No job found'}), 404
-    else:
-        return(jsonify({'status':'Could not authenticate worker!'}))
+            if job_type == "img2vid":
+                mycursor.execute(
+                    "UPDATE requests SET started_at=%s WHERE job_id=%s",
+                    (now, job_id)
+                )
+                mydb.commit()
+                result = {
+                    "job_id": job_id,
+                    "requested_prompt": prompt,
+                    "channel": channel_id,
+                    "request_type": job_type,
+                    "image_link": image_link,
+                    "requester": requester
+                }
+                return jsonify(result)
+        return jsonify({'status': 'No job found'}), 500
+
+    finally:
+        try:
+            mycursor.close()
+        except Exception:
+            pass
+        try:
+            mydb.close()
+        except Exception:
+            pass
     
 async def upload_to_discord(files, channel, requester, job_id, prompt, model):
     print("sending to discord")
-    await bot.get_channel(int(channel)).send(content=f"<@{requester}>\nJob ID: {job_id}```{prompt}```Checkpoint/Model: {model}",files=files)
+    try:
+        await bot.get_channel(int(channel)).send(content=f"<@{requester}>\nJob ID: {job_id}",files=files)
+    except Exception as e:
+        print(f"Error sending to Discord: {e}")
 
-async def job_failed_discord_message(channel, requester, job_id):
+async def job_failed_discord_message(channel, requester, message):
+    print(channel)
     print("sending failure message to discord")
-    await bot.get_channel(int(channel)).send(content=f"<@{requester}>\nJob ID: {job_id} has failed. Please check your request for any errors, if you are unsure what happened, try to resubmit the request.")
+    await bot.get_channel(int(channel)).send(content=f"<@{requester}>\n {message}")
+    
 @app.route('/api/upload', methods=['POST'])
 def upload_images():
     if authenticate_worker(request.form.get("worker_id")):
         requester = request.form.get("requester")
-        mydb = mysql.connector.connect(
+        mydb = pymysql.connect(
             host=config.db_host,
             user="root",
             password=config.db_pass,
             database="user_requests"
-            )
+        )
         mycursor = mydb.cursor()
         channel = request.form.get('channel')
         job_id = request.form.get('job_id')
         prompt = request.form.get('prompt')
-        model = request.form.get('model')
+        model = request.form.get('model') or "none:"
         if 'images' not in request.files:
             return jsonify({"error": "No 'images' field in request"}), 400
 
         files = request.files.getlist('images')
         saved_files = []
         upload_files = []
+        os.makedirs('uploads', exist_ok=True)
         i = 0
         for file in files:
-            if file.filename:
-                file.save(f'uploads/{channel}_{i}.png')
-                saved_files.append(file.filename)
-                upload_files.append(discord.File(f'uploads/{channel}_{i}.png'))
+            if file and file.filename:
+                original_name = secure_filename(file.filename)
+                _, ext = os.path.splitext(original_name)
+                save_path = f'uploads/{channel}_{i}{ext}' if ext else f'uploads/{channel}_{job_id}_{i}'
+                file.save(save_path)
+                saved_files.append(original_name)
+                upload_files.append(discord.File(save_path))
                 i += 1
-        
-        mycursor.execute("""DELETE FROM requests WHERE job_id = %s""",(int(job_id),))
+                # Copy job entry into completed_jobs before deletion
+        worker_id = request.form.get("worker_id")
+        mycursor.execute("SELECT * FROM requests WHERE job_id = %s", (int(job_id),))
+        job_row = mycursor.fetchone()
+
+        if job_row:
+            # Assuming completed_jobs has the same columns as requests plus 'worker'
+            # You may need to adjust column names depending on your schema
+            columns = [desc[0] for desc in mycursor.description]
+            placeholders = ', '.join(['%s'] * (len(columns) + 1))  # +1 for worker
+            insert_query = f"""
+                INSERT INTO completed_jobs ({', '.join(columns)}, worker)
+                VALUES ({placeholders})
+            """
+            mycursor.execute(insert_query, job_row + (worker_id,))
+            mydb.commit()
+
+        # Now remove from requests
+        mycursor.execute("""DELETE FROM requests WHERE job_id = %s""", (int(job_id),))
         mydb.commit()
-        asyncio.run_coroutine_threadsafe(upload_to_discord(upload_files,channel, requester,job_id,prompt, model),bot.loop)
-        return jsonify({"status": "success", "message": "Images uploaded"})
+        asyncio.run_coroutine_threadsafe(upload_to_discord(upload_files, channel, requester, job_id, prompt, model), bot.loop)
+
+        return jsonify({"status": "success", "message": "Images uploaded", "files": saved_files})
     else:
-        return(jsonify({'status':'Could not authenticate worker!'}))
+        return jsonify({'status': 'Could not authenticate worker!'})
 @bot.event
 async def on_ready():
     print(f"🤖 Bot logged in as {bot.user}")
@@ -333,7 +404,7 @@ def run_flask():
 
 def db_cleanup():
     print("DB cleanup running")
-    mydb = mysql.connector.connect(
+    mydb = pymysql.connect(
         host=config.db_host,
         user="root",
         password=config.db_pass,
@@ -348,6 +419,23 @@ def db_cleanup():
     mycursor.execute(query)
     mydb.commit()
     select_query = "SELECT * FROM requests WHERE attempts >= 3"
+    mycursor.execute(select_query)
+    rows_to_delete = mycursor.fetchall()
+    for rows in rows_to_delete:
+        channel = rows[9]
+        requester = rows[4]
+        job_id = rows[0]
+        asyncio.run_coroutine_threadsafe(job_failed_discord_message(channel, requester, message=f"Job ID: {job_id} has failed! \n\nThis job has times out on 3 occasions, please double check your requests format!"), bot.loop)
+        print(f"Deleting job with ID: {rows[0]} due to too many attempts.")
+    print(f"{mycursor.rowcount} rows updated while checking job status.")
+    mycursor = mydb.cursor()
+    query = """
+        UPDATE requests
+        SET started_at = NULL
+        WHERE started_at <= NOW() - INTERVAL 180 MINUTE
+    """
+    mycursor.execute(query)
+    mydb.commit()
     mycursor.execute(select_query)
     rows_to_delete = mycursor.fetchall()
     for rows in rows_to_delete:
@@ -373,7 +461,7 @@ threading.Thread(target=run_flask, daemon=True).start()
 threading.Timer(600, db_cleanup).start()
 
 @bot.slash_command(description = "Generate an AI image")
-async def gen(ctx, prompt: Option(str, "What prompt are you going to use?"), negative_prompt: Option(str, "What negative prompt are you going to use?"), checkpoint_hash: Option(str, "What checkpoint are you going to use?"), batch_size: Option(int,choices=[1,2,3,4,5]), resolution: Option(str, "What size do you want the image to be? (WxH) MAXIMUM is 1536x1536", required = False), config_scale: Option(int, "What CFG scale do you want to use? (Default is 5 for SD and SDXL, 3.5 for FLUX)", default = 5,choices=[1,2,3,4,5,6,7,8,9,10],required=False), steps: Option(int, "How many steps do you want to use? (Default is 25, Max is 35)", default = 25,required=False)):
+async def gen(ctx, prompt: Option(str, "What prompt are you going to use?"), checkpoint_hash: Option(str, "Sumit the HASH of the model you would like to use!"), batch_size: Option(int,choices=[1,2,3,4,5]), resolution: Option(str, "What size do you want the image to be? (WxH) MAXIMUM is 1536x1536", required = False), config_scale: Option(int, "What CFG scale do you want to use? (Default is 5 for SD and SDXL, 3.5 for FLUX)", default = 5,choices=[1,2,3,4,5,6,7,8,9,10],required=False), steps: Option(int, "How many steps do you want to use? (Default is 25, Max is 35)", default = 25,required=False),negative_prompt: Option(str, "What negative prompt are you going to use?", default = "",required=False),sampler: Option(str, "What sampler should we use? (Default Euler)", default = "Euler",required=False),clip_skip: Option(int, "What clip skip should we use? (Default Euler)", choices=[1,2,3,4,5,6,7,8,9,10], default = 2,required=False),facefix: Option(str, "Use facefix? (Default False)",choices=["True","False"], default = False,required=False), hires: Option(str, "Use highres fix? (Default False)", choices=["True","False"], default = False,required=False)):
     print("added to queue")
 
 """@bot.slash_command(description = "Generate an AI QR code image")
@@ -394,7 +482,9 @@ async def img2img(ctx, image: Option(discord.Attachment, "What image are you goi
 @bot.slash_command(description = "Get a list of available checkpoints and LorAs that Klover has access to")
 async def models(ctx):
     print("sharing models")
-
+@bot.slash_command(description = "Generate an AI video from an image!")
+async def img2vid(ctx, image: Option(discord.Attachment, "What image are you going to fuse?"), prompt: Option(str, "What prompt are you going to use?")):
+    print("img2vid")
 @bot.slash_command(description = "Download a style for use with the bot")
 async def facefix(ctx, image: Option(discord.Attachment, "What image are you going to face fix?"), prompt: Option(str, "What prompt do you want to run for face fix?"), checkpoint_hash: Option(str, "What checkpoint do you want to sue for face fix? (check /models for a full list!)")):
     print("face fix")
@@ -404,3 +494,4 @@ async def upscale(ctx, image: Option(discord.Attachment, "What image are you goi
     print("upscale")
 # 2) run the bot
 bot.run(config.discord_token)
+

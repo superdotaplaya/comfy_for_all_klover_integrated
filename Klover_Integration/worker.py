@@ -11,6 +11,13 @@ import io
 import re
 import tkinter as tk
 from tkinter import ttk, messagebox
+from urllib import request
+import PIL.Image as Image
+import websocket
+import uuid
+from urllib.parse import urlparse
+import random 
+
 
 idle_time_setting = 30
 polling_interval = 15
@@ -23,12 +30,14 @@ forge_model_directory = "F:\\stable-diffusion-webui-reForge\\models\\Stable-diff
 lora_model_directory = "F:\\stable-diffusion-webui-reForge\\models\\Lora"
 civit_api_token = ""
 worker_id = ""
-accepted_job_types = ["generate", "facefix", "img2img", "upscale"]
+accepted_job_types = ["generate", "facefix", "img2img", "upscale", "img2vid"]
 max_batch_size = 5
 server_url = "https://c3bc6e2471d1.ngrok-free.app"
 auto_dl_lora = True
 auto_dl_checkpoints = True
 output_directory = "F:\\stable-diffusion-webui-reForge\\outputs\\txt2img-images"
+worker_type = "forge"
+worker_main_loop = None
 
 def run_app():
     check_checkpoint_hashes()
@@ -37,7 +46,7 @@ def run_app():
     # Start the first execution
     main_loop()
 def load_user_interface():
-    global forge_model_directory, lora_model_directory, server_url, civit_api_token, auto_dl_lora, auto_dl_checkpoints
+    global forge_model_directory, lora_model_directory, server_url, civit_api_token, auto_dl_lora, auto_dl_checkpoints, aria2_path, output_directory
     root = tk.Tk()
     root.title("Forge SD Worker")
 
@@ -45,22 +54,25 @@ def load_user_interface():
     auto_dl_lora = tk.BooleanVar()
     auto_dl_checkpoints = tk.BooleanVar()
 
-    # Default values
-    forge_model_directory = ""
-    lora_model_directory = ""
-    server_url = ""
-    civit_api_token = ""
-    output_directory = ""
+    # Use current globals as defaults (fall back to empty string)
+    forge_model_directory = forge_model_directory if 'forge_model_directory' in globals() else ""
+    lora_model_directory  = lora_model_directory  if 'lora_model_directory' in globals() else ""
+    server_url            = server_url            if 'server_url' in globals() else ""
+    civit_api_token       = civit_api_token       if 'civit_api_token' in globals() else ""
+    aria2_path            = aria2_path            if 'aria2_path' in globals() else ""
+    output_directory      = output_directory      if 'output_directory' in globals() else ""
 
     # Load config if it exists
     if os.path.exists("worker_config.json"):
         try:
             with open("worker_config.json", "r") as config_file:
                 config = json.load(config_file)
-                forge_model_directory = config.get("forge_model_directory", "")
-                lora_model_directory = config.get("lora_model_directory", "")
-                server_url = config.get("server_url", "")
-                civit_api_token = config.get("civit_api_token", "")
+                forge_model_directory = config.get("forge_model_directory", forge_model_directory)
+                lora_model_directory  = config.get("lora_model_directory", lora_model_directory)
+                server_url            = config.get("server_url", server_url)
+                civit_api_token       = config.get("civit_api_token", civit_api_token)
+                aria2_path            = config.get("aria2_path", aria2_path)
+                output_directory      = config.get("output_directory", output_directory)
                 auto_dl_lora.set(config.get("auto_dl_lora", False))
                 auto_dl_checkpoints.set(config.get("auto_dl_checkpoints", False))
         except Exception as e:
@@ -90,13 +102,23 @@ def load_user_interface():
     Civit_API_Token.insert(0, civit_api_token)
     Civit_API_Token.grid(column=1, row=4)
 
-    ttk.Label(frm, text="Auto Download Lora:").grid(column=0, row=5, sticky="w")
-    Auto_DL_Lora = ttk.Checkbutton(frm, variable=auto_dl_lora)
-    Auto_DL_Lora.grid(column=1, row=5, sticky="w")
+    ttk.Label(frm, text="Aria2 Executable Path:").grid(column=0, row=5, sticky="w")
+    Aria2_Path = ttk.Entry(frm, width=100)
+    Aria2_Path.insert(0, aria2_path)
+    Aria2_Path.grid(column=1, row=5)
 
-    ttk.Label(frm, text="Auto Download Checkpoints:").grid(column=0, row=6, sticky="w")
+    ttk.Label(frm, text="Image Output Directory:").grid(column=0, row=6, sticky="w")
+    Output_Directory = ttk.Entry(frm, width=100)
+    Output_Directory.insert(0, output_directory)
+    Output_Directory.grid(column=1, row=6)
+
+    ttk.Label(frm, text="Auto Download Lora:").grid(column=0, row=7, sticky="w")
+    Auto_DL_Lora = ttk.Checkbutton(frm, variable=auto_dl_lora)
+    Auto_DL_Lora.grid(column=1, row=7, sticky="w")
+
+    ttk.Label(frm, text="Auto Download Checkpoints:").grid(column=0, row=8, sticky="w")
     Auto_DL_Checkpoints = ttk.Checkbutton(frm, variable=auto_dl_checkpoints)
-    Auto_DL_Checkpoints.grid(column=1, row=6, sticky="w")
+    Auto_DL_Checkpoints.grid(column=1, row=8, sticky="w")
 
     # Save button
     ttk.Button(frm, text="Save Settings", command=lambda: save_settings(
@@ -104,32 +126,44 @@ def load_user_interface():
         Lora_Model_Directory.get(),
         Server_URL.get(),
         Civit_API_Token.get(),
+        Aria2_Path.get(),
+        Output_Directory.get(),
         auto_dl_lora.get(),
         auto_dl_checkpoints.get()
-    )).grid(column=1, row=7)
+    )).grid(column=1, row=9)
+
+    # Update globals with current entries so values are available immediately
     forge_model_directory = SD_Model_Directory.get()
     lora_model_directory = Lora_Model_Directory.get()
     server_url = Server_URL.get()
     civit_api_token = Civit_API_Token.get()
-    auto_dl_lora = auto_dl_lora
-    auto_dl_checkpoints = auto_dl_checkpoints
+    aria2_path = Aria2_Path.get()
+    output_directory = Output_Directory.get()
 
-    # Quit button
-    ttk.Button(frm, text="Start Worker!", command=run_app).grid(column=1, row=9)
-    ttk.Button(frm, text="Quit", command=root.destroy).grid(column=1, row=10)
+    # Start / Quit buttons
+    ttk.Button(frm, text="Start Worker!", command=run_app).grid(column=1, row=11)
+    ttk.Button(frm, text="Quit", command=root.destroy).grid(column=1, row=12)
 
     root.mainloop()
 
-def save_settings(forge_model_dir, lora_model_dir, server, token, dl_lora, dl_checkpoints):
+def save_settings(forge_model_dir, lora_model_dir, server, token, aria2, out_dir, dl_lora, dl_checkpoints):
+    global forge_model_directory, lora_model_directory, server_url, civit_api_token, aria2_path, output_directory, auto_dl_lora, auto_dl_checkpoints
     config = {
         "forge_model_directory": forge_model_dir,
         "lora_model_directory": lora_model_dir,
         "server_url": server,
         "civit_api_token": token,
+        "aria2_path": aria2,
+        "output_directory": out_dir,
         "auto_dl_lora": dl_lora,
         "auto_dl_checkpoints": dl_checkpoints
     }
-
+    forge_model_directory = forge_model_dir
+    lora_model_directory = lora_model_dir
+    server_url = server
+    civit_api_token = token
+    aria2_path = aria2
+    output_directory = out_dir
     try:
         with open("worker_config.json", "w") as config_file:
             json.dump(config, config_file, indent=4)
@@ -242,92 +276,136 @@ def worker_login():
                     checkpoint_hashes_list.append(hash[0])
             for hash in raw_lora_hashes:
                     lora_hashes_list.append(hash[0])
-            resp = requests.get(f'{server_url}/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list, 'dl_lora':auto_dl_lora.get(), 'dl_checkpoint': auto_dl_checkpoints.get()})
+            resp = requests.get(f'{server_url}/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list, 'dl_lora':auto_dl_lora.get(), 'dl_checkpoint': auto_dl_checkpoints.get()}, timeout=5)
             if not resp.json().get("created"):
                 print(f"Worker authenticated successfully! Acceptable Job Types: {accepted_job_types}")
-    except Exception as e:
-        print(e)
-        resp = requests.get(f'{server_url}/api/init', json = {'worker_id': "N/A"})
-        if resp.json().get("created"):
-            worker_id = resp.json().get("worker_id")
-            print(f'New user created: {worker_id}...')
-            json.dump({'worker_id': worker_id}, open('worker_auth.json', 'w'), indent=4)
+    except:
+        print("Unable to connect to the server, retrying in 15 seconds...")
+        time.sleep(15)
+        worker_login()
 
 # JOB PROCESSING BELOW
 def get_job():
     global worker_id
     global forge_model_directory
+    global aria2_path
     today = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-    """ try:"""
-    resp = requests.get(f'{server_url}/api/get-job', json = {'worker_id':worker_id})
-    #Download missing checkpoint if job is found to require it
-    if resp.status_code == 201:
-        download_hash = resp.json()['status'].split(': ')[1]
-        print(download_hash)
-        resp = requests.get(f'https://civitai.com/api/v1/model-versions/by-hash/{download_hash}')
-        resp_dict = resp.json()
-        print(resp_dict)
-        style_id = resp_dict['id']
-        url = f"https://civitai.com/api/download/models/{style_id}?token={civit_api_token}"
-        os.system(f"F:/aria2-1.37.0-win-64bit-build1/aria2c.exe -d {forge_model_directory} {url} --conf F:/aria2-1.37.0-win-64bit-build1/config.cfg")
-        resp = requests.post('http://127.0.0.1:7860/sdapi/v1/refresh-checkpoints')
-        check_checkpoint_hashes()
+    try:
+        resp = requests.get(f'{server_url}/api/get-job', json = {'worker_id':worker_id}, timeout=5)
+        #Download missing checkpoint if job is found to require it
+        if resp.status_code == 201:
+            job = resp.json()
+            print(job)
+            job_id     = job['job_id']
+            channel_id = job['channel']
+            requester = job['requester']
+            download_hash = resp.json()['status'].split(': ')[1]
+            print(download_hash)
+            try:
+                resp1 = requests.get(f'https://civitai.com/api/v1/model-versions/by-hash/{download_hash}')
+                resp_dict = resp1.json()
+                print(resp_dict)
+                style_id = resp_dict['id']
+                url = f"https://civitai.com/api/download/models/{style_id}?token={civit_api_token}"
+                os.system(f"{aria2_path}/aria2c.exe -d {forge_model_directory} {url} --conf {aria2_path}/config.cfg")
+                resp2 = requests.post('http://127.0.0.1:7860/sdapi/v1/refresh-checkpoints')
+                check_checkpoint_hashes()
+                return
+            except:
+
+                    resp = requests.get(f'{server_url}/api/download-fail', json = {'worker_id': worker_id, 'job_id': job_id, 'requester': requester, 'channel': channel_id})
+            return
+        if resp.status_code == 202:
+            job = resp.json()
+            job_id     = job['job_id']
+            channel_id = job['channel']
+            requester = job['requester']
+            download_hashes = job['download_loras']
+            print(download_hashes)
+            for missing_hash in download_hashes:
+                print(f'Downloading model: {missing_hash}')
+                try:
+                    resp1 = requests.get(f'https://civitai.com/api/v1/model-versions/by-hash/{missing_hash.replace(" ","")}')
+                    resp_dict = resp1.json()
+                    print(resp_dict)
+                    style_id = resp_dict['id']
+                    url = f"https://civitai.com/api/download/models/{style_id}?token={civit_api_token}"
+                    os.system(f"{aria2_path}/aria2c.exe -d {lora_model_directory} {url} --conf {aria2_path}/config.cfg")
+                    resp = requests.post('http://127.0.0.1:7860/sdapi/v1/refresh-loras')
+                    check_lora_hashes()
+                    print("Relogging to update available models and job types!")
+                    worker_login()
+                except:
+                    resp2 = requests.get(f'{server_url}/api/download-fail', json = {'worker_id': worker_id, 'job_id': job_id, 'requester': requester, 'channel': channel_id})
+
+            return
+        if resp.status_code == 500:
+            print(f"[{today}] || No accceptable job found. Status:", resp.status_code)
+            return
+        elif resp.status_code != 200:
+            print("unable to connect to server, relogging in 15 seconds...")
+            pass
+        """try:"""
+        job = resp.json()          # now a dict!
+        job_type   = job['request_type']
+        job_id     = job['job_id']
+        prompt     = job['requested_prompt']
+        prompt = lora_conversion(prompt)
+        print(prompt)
+        channel_id = job['channel']
+        if job_type != "img2vid":
+            model_hash = hash_to_model_name(job['model'],"checkpoints")
+            steps      = job['steps']
+            neg_prompt = job.get('negative_prompt', "")
+            resolution = job.get('resolution')
+            batch_size = job.get('batch_size')
+            cfg_scale  = job.get('config_scale')
+            sampler = job.get('sampler', "Euler")
+            clip_skip = job.get('clip_skip', 2)
+            face_fix = job.get('face_fix', "False")
+            hires_fix = job.get('hires_fix', "False")
+        image_link = job.get('image_link')   
+        
+
+        requester = job.get('requester')
+        try:
+            print(f"[{today}] || Job recieved: \nJob ID: {job_id}\nJob Type: {job_type}\nModel/Checkpoint: {model_hash}")
+        except:
+            print(f"[{today}] || Job recieved: \nJob ID: {job_id}\nJob Type: {job_type}\nModel/Checkpoint: None")
+        if job_type in ["generate", "generate chat"]:
+            if worker_type == "forge":
+                generate_image(
+                channel_id, prompt, model_hash, neg_prompt,
+                resolution, job_type, batch_size,
+                cfg_scale, steps, job_id, requester, sampler, clip_skip, face_fix, hires_fix
+                )
+            elif worker_type == "comfy":
+                generate_image_comfy(
+                channel_id, prompt, model_hash, neg_prompt,
+                resolution, job_type, batch_size,
+                cfg_scale, steps, job_id, requester, sampler, clip_skip, face_fix, hires_fix
+                )
+        elif job_type == "face fix":
+            face_fix_post(
+            image_link, channel_id, model_hash,
+            prompt, job_id, requester
+            )
+        elif job_type == "upscale":
+            upscale_image(image_link,channel_id,cfg_scale,job_id, requester)
+        elif job_type == "img2img":
+            if worker_type == "forge":
+                img2imggen(image_link,channel_id,model_hash,prompt,neg_prompt,resolution,batch_size, job_id, requester)
+            elif worker_type == "comfy":
+                img2img_comfy(image_link,channel_id,model_hash,prompt,neg_prompt,resolution,batch_size, job_id, requester)
+        elif job_type == "img2vid":
+            img2vidgen(image_link,channel_id,prompt, job_id, requester)
+    except requests.RequestException as e:
+        print(f"Unable to connect to server, relogging in 15 seconds...")
         worker_login()
-        return
-    if resp.status_code == 202:
-        download_hashes = resp.json()['status'].split(': ')[1].split(',')
-        for missing_hash in download_hashes:
-            print(f'Downloading model: {missing_hash}')
-            resp = requests.get(f'https://civitai.com/api/v1/model-versions/by-hash/{missing_hash}')
-            resp_dict = resp.json()
-            print(resp_dict)
-            style_id = resp_dict['id']
-            url = f"https://civitai.com/api/download/models/{style_id}?token={civit_api_token}"
-            os.system(f"F:/aria2-1.37.0-win-64bit-build1/aria2c.exe -d {lora_model_directory} {url} --conf F:/aria2-1.37.0-win-64bit-build1/config.cfg")
-            resp = requests.post('http://127.0.0.1:7860/sdapi/v1/refresh-loras')
-        check_lora_hashes()
-        worker_login()
-        return
-    if resp.status_code != 200:
-        print(f"[{today}] || No accceptable job found. Status:", resp.status_code)
-        return
-    
-    job = resp.json()          # now a dict!
-    job_type   = job['request_type']
-    job_id     = job['job_id']
-    prompt     = job['requested_prompt']
-    prompt = lora_conversion(prompt)
-    print(prompt)
-    channel_id = job['channel']
-    model_hash = hash_to_model_name(job['model'],"checkpoints")
-    image_link = job.get('image_link')   
-    steps      = job['steps']
-    neg_prompt = job.get('neg_prompt', "")
-    resolution = job.get('resolution')
-    batch_size = job.get('batch_size')
-    cfg_scale  = job.get('config_scale')
-    requester = job.get('requester')
-    print(f"[{today}] || Job recieved: \nJob ID: {job_id}\nJob Type: {job_type}\nModel/Checkpoint: {model_hash}")
-    if job_type in ["generate", "generate chat"]:
-        generate_image(
-        channel_id, prompt, model_hash, neg_prompt,
-        resolution, job_type, batch_size,
-        cfg_scale, steps, job_id, requester
-        )
-    elif job_type == "face fix":
-        face_fix_post(
-        image_link, channel_id, model_hash,
-        prompt, job_id, requester
-        )
-    elif job_type == "upscale":
-        upscale_image(image_link,channel_id,cfg_scale,job_id, requester)
-    elif job_type == "img2img":
-        img2imggen(image_link,channel_id,model_hash,prompt,neg_prompt,resolution,batch_size, job_id, requester)
-    """except requests.RequestException as e:
-        print(f"Request failed: {e}")
-        get_job()"""
     """except:
         print("No applicable jobs found")"""
+    """except:
+        print("Unable to connect to get job, if this continues to occur, please contact superdotaplaya!")"""
 
 
 def submit_results(images,channel_id,requester,job_id,prompt,model):
@@ -368,12 +446,14 @@ def is_gpu_idle(gpu_id, threshold=10):
 
 def main_loop():
     global gpu_idle_timer
+    global worker_main_loop
     if is_gpu_idle(gpu_id_setting) and gpu_idle_timer > 0:
         gpu_idle_timer -= polling_interval
         print("gpu time remaining until idle: " + str(gpu_idle_timer) + " seconds")
     elif gpu_idle_timer <= 0:
         get_job()
-    threading.Timer(polling_interval, main_loop).start()
+
+    worker_main_loop = threading.Timer(polling_interval, main_loop).start()
 
 def get_newest_files(directory, count=1):
     # Get all files in the directory with their full paths
@@ -385,6 +465,8 @@ def get_newest_files(directory, count=1):
     # Return the specified number of newest files
     return files[:count]
 
+def str_to_bool(s):
+    return s.lower() in ['true', '1', 'yes', 'y']
 
 
 
@@ -399,7 +481,10 @@ def generate_image(channel_id,
                    batch_size,
                    cfg_scale,
                    steps,
-                   job_id, requester):
+                   job_id, requester, sampler,
+                   clip_skip,
+                   face_fix,
+                   hires_fix):
     global output_directory
     # 1) Coerce None → sane defaults
     if cfg_scale is None:
@@ -420,18 +505,18 @@ def generate_image(channel_id,
     # 3) Build payload
     payload = {
         "prompt": prompt,
-        "sampler_index": "Euler",
+        "sampler_index": sampler,
         "alwayson_scripts": {
             "ADetailer": {
             "args": [
-                True,
-                True,
+                str_to_bool(face_fix),
+                str_to_bool(face_fix),
                 {
                 "ad_model": "face_yolov8s.pt",
                 "ad_model_classes": "",
                 "ad_tab_enable": True,
                 "ad_prompt": prompt,
-                "ad_negative_prompt": "",
+                "ad_negative_prompt": neg_prompt,
                 "ad_confidence": 0.3,
                 "ad_mask_filter_method": "Area",
                 "ad_mask_k": 0,
@@ -473,6 +558,13 @@ def generate_image(channel_id,
             }
         },
         "scheduler": "Automatic",
+        "enable_hr": str_to_bool(hires_fix),
+        "hr_upscaler": "R-ESRGAN 4x+",
+        "hr_checkpoint_name": "Use same checkpoint",
+        "hr_scale": 1.5,
+        "hr_prompt": "",
+        "denoising_strength": 0.4,
+        "hr_second_pass_steps": 15,
         "steps": steps,
         "sd_model_checkpoint": model,
         "batch_size": batch_size,
@@ -483,6 +575,7 @@ def generate_image(channel_id,
         "filter_nsfw": False,
         "negative_prompt": neg_prompt,
         "save_images": True,
+        "clip_skip": int(clip_skip),
     }
 
     # 4) Optionally set the model on the WebUI first
@@ -502,8 +595,12 @@ def generate_image(channel_id,
     # 6) Grab today’s folder
     today = datetime.now().strftime("%Y-%m-%d")
     output_dir = fr"{output_directory}\\{today}"
-
+    grid_dir = fr"{'\\'.join(output_directory.split('\\')[:3])}\txt2img-grids\{today}"
+    print(grid_dir)
     images = []
+    grid_files = get_newest_files(grid_dir,batch_size)
+    for path in grid_files:
+        os.remove(path)
     files = get_newest_files(output_dir, batch_size)  # your helper
     for path in files:
         f = open(path, "rb")
@@ -595,7 +692,7 @@ def upscale_image(image_link,channel,upscale_by,job_id, requester):
         "upscaling_resize_w": 3072,
         "upscaling_resize_h": 3072,
         "upscaling_crop": True,
-        "upscaler_1": "R-ESRGAN 4x+",
+        "upscaler_1": "R-ESRGAN 4x+ Anime6B",
         "upscaler_2": "None",
         "extras_upscaler_2_visibility": 0,
         "upscale_first": False,
@@ -610,8 +707,286 @@ def upscale_image(image_link,channel,upscale_by,job_id, requester):
     files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
     submit_results(files,channel,requester,job_id,"upscaled image","Upscale")
     os.remove("output.png")
+def generate_image_comfy(channel_id, user_prompt, model_hash, neg_prompt,
+            resolution, job_type, batch_size,
+            cfg_scale, steps, job_id, requester, sampler, clip_skip, face_fix, hires_fix):
+         # Get prompt_id for tracking the execution
+    client_id = str(uuid.uuid4())  # Generate a unique client ID
+    seed = random.randint(1, 999999999999999)
+    loras = re.findall(r"<.*?>", user_prompt)
+    neg_loras = re.findall(r"<.*?>", neg_prompt)
+    completed_loras = []
+    for lora in loras:
+        lora = lora.replace("<","").replace(">","").split(":")
+        completed_loras.append([True,lora[1],lora[2]])
+    for lora in neg_loras:
+        lora = lora.replace("<").replace(">").split(":")
+        completed_loras.append([False,lora[1],lora[2]])
+    user_prompt = re.sub(r"<.*?>", "", user_prompt)
+    neg_prompt = re.sub(r"<.*?>", "", neg_prompt)
+    i = 1
+    prompt = json.load(open("Klover_SDXL.json", "r", encoding="utf-8"))
+    for lora in completed_loras :
+        prompt['63']['inputs'][f'lora_{i}'] = {'on': True, 'lora': f'{lora[1]}.safetensors', 'strength': float(lora[2])}
+    prompt['5']['inputs']['width'] = int(resolution.lower().split('x')[0])
+    prompt['5']['inputs']['height'] = int(resolution.lower().split('x')[1])
+    prompt["5"]["inputs"]["batch_size"] = batch_size
+    prompt['6']['inputs']['text'] = user_prompt
+    prompt['7']['inputs']['text'] = neg_prompt
+    prompt['4']['inputs']['ckpt_name'] = model_hash
+    prompt['58']['inputs']['steps'] = steps
+    prompt['58']['inputs']['sampler_name'] = sampler.lower()
+    prompt['58']['inputs']['seed'] = seed
+    prompt['97']['inputs']['seed'] = seed
+    prompt['97']['inputs']['cfg'] = cfg_scale
+    prompt['93']['inputs']['seed'] = seed
+    prompt['93']['inputs']['cfg'] = cfg_scale
+    print(prompt)
+    #set the text prompt for our positive CLIPTextEncode
+    p = {"prompt": prompt, "client_id": client_id}
+    data = json.dumps(p).encode('utf-8')
+    req = request.Request(f"http://127.0.0.1:8188/prompt", data=data)
+    prompt_id = json.loads(request.urlopen(req).read())['prompt_id']
+    ws = websocket.WebSocket()
+    ws.connect(f"ws://127.0.0.1:8188/ws?clientId={client_id}")
+    # Ensure all referenced node IDs exist and are correct
+    # For example, check that all "model", "positive", "negative", "vae", "image" references point to valid node IDs
+    # If you change the image or prompt, make sure downstream nodes are updated accordingly
 
 
+
+    while True:
+        out = ws.recv()
+        if isinstance(out, str):
+            message = json.loads(out)
+            if message['type'] == 'executing':
+                data = message['data']
+                if data['node'] is None and data['prompt_id'] == prompt_id:
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    output_dir = rf"C:\Users\main\Documents\ComfyUI\output"
+
+                    images = []
+                    files = get_newest_files(output_dir, batch_size)  # your helper
+                    for path in files:
+                        try:
+                            f = open(path, "rb")
+                            for path in files:
+                                f = open(path, "rb")
+                                mime = "image/png" if path.lower().endswith(('.png')) else "application/octet-stream"
+                                images.append(("images", (os.path.basename(path), f, mime)))
+                                print(images)
+                            # upload videos (submit_results expects same tuple shape as images)
+                            submit_results(images, channel_id, requester, job_id, str(prompt) if not isinstance(prompt, str) else prompt, "Video")
+                            ws.close()
+                        except:
+                            ws.close()
+                            break
+                    break  # Execution complete
+        else:
+            # Binary data (preview images)
+            continue
+
+
+def img2img_comfy(image_link, channel_id, checkpoint, user_prompt, negative_prompt, resolution, batch_size, job_id, requester):
+    try:
+        # Download image from image_link and save it into ComfyUI input folder
+        print(image_link)
+        resp = requests.get(image_link, stream=True, timeout=30)
+        resp.raise_for_status()
+
+        parsed = urlparse(image_link)
+        ext = os.path.splitext(parsed.path)[1]
+        if not ext:
+            ctype = resp.headers.get("content-type", "")
+            if "jpeg" in ctype or "jpg" in ctype:
+                ext = ".jpg"
+            elif "png" in ctype:
+                ext = ".png"
+            elif "webp" in ctype:
+                ext = ".webp"
+            else:
+                ext = ".png"
+
+        fname = f"img2img{ext}"
+        input_dir = rf"C:\Users\main\Documents\ComfyUI\input"
+        os.makedirs(input_dir, exist_ok=True)
+        out_path = os.path.join(input_dir, fname)
+
+        with open(out_path, "wb") as f:
+            for chunk in resp.iter_content(8192):
+                if chunk:
+                    f.write(chunk)
+
+        # Tell the prompt to use the downloaded file (ComfyUI expects the filename)
+        print(f"Downloaded image to {out_path}")
+    except Exception as e:
+        print(f"Failed to download image: {e}")
+    
+    
+    loras = re.findall(r"<.*?>", user_prompt)
+    neg_loras = re.findall(r"<.*?>", negative_prompt)
+    completed_loras = []
+    for lora in loras:
+        lora = lora.replace("<","").replace(">","").split(":")
+        completed_loras.append([True,lora[1],lora[2]])
+    for lora in neg_loras:
+        lora = lora.replace("<").replace(">").split(":")
+        completed_loras.append([False,lora[1],lora[2]])
+    user_prompt = re.sub(r"<.*?>", "", user_prompt)
+    negative_prompt = re.sub(r"<.*?>", "", negative_prompt)
+    i = 1
+    prompt = json.load(open("Klover_img2img.json", "r", encoding="utf-8"))
+    for lora in completed_loras :
+        prompt['33']['inputs'][f'lora_{i}'] = {'on': True, 'lora': f'{lora[1]}.safetensors', 'strength': float(lora[2])}
+        i+=1
+    
+    
+    seed = random.randint(1, 999999999999999)
+    client_id = str(uuid.uuid4())  # Generate a unique client ID
+    
+    print(prompt)
+    prompt["29"]["inputs"]["image"] = 'img2img.png'
+    prompt['26']['inputs']['seed'] = seed
+    prompt['23']['inputs']['ckpt_name'] = checkpoint
+    prompt['24']['inputs']['text'] = user_prompt
+    prompt['25']['inputs']['text'] = negative_prompt
+    p = {"prompt": prompt, "client_id": client_id}
+    data = json.dumps(p).encode('utf-8')
+    req = request.Request(f"http://127.0.0.1:8188/prompt", data=data)
+    prompt_id = json.loads(request.urlopen(req).read())['prompt_id']
+    ws = websocket.WebSocket()
+    ws.connect(f"ws://127.0.0.1:8188/ws?clientId={client_id}")
+
+    while True:
+        out = ws.recv()
+        if isinstance(out, str):
+            message = json.loads(out)
+            if message['type'] == 'executing':
+                data = message['data']
+                if data['node'] is None and data['prompt_id'] == prompt_id:
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    output_dir = rf"C:\Users\main\Documents\ComfyUI\output"
+
+                    images = []
+                    files = get_newest_files(output_dir, batch_size)  # your helper
+                    for path in files:
+                        try:
+                            f = open(path, "rb")
+                            for path in files:
+                                f = open(path, "rb")
+                                mime = "image/png" if path.lower().endswith(('.png')) else "application/octet-stream"
+                                images.append(("images", (os.path.basename(path), f, mime)))
+                                print(images)
+                            # upload videos (submit_results expects same tuple shape as images)
+                            submit_results(images, channel_id, requester, job_id, str(prompt) if not isinstance(prompt, str) else prompt, "Video")
+                            ws.close()
+                        except:
+                            ws.close()
+                            break
+                    break  # Execution complete
+        else:
+            # Binary data (preview images)
+            continue
+
+
+
+
+def img2vidgen(image_link,channel_id,user_prompt, job_id, requester):
+
+        # Get prompt_id for tracking the execution
+    client_id = str(uuid.uuid4())  # Generate a unique client ID
+
+    prompt = json.load(open("E:\klover_for_all\Main\Klover_Integration\Klover_img2vid.json", "r", encoding="utf-8"))
+    print(prompt)
+    #set the text prompt for our positive CLIPTextEncode
+    prompt["88"]["inputs"]["value"] = user_prompt
+    
+    try:
+        # Download image from image_link and save it into ComfyUI input folder
+        print(image_link)
+        resp = requests.get(image_link, stream=True, timeout=30)
+        resp.raise_for_status()
+
+        parsed = urlparse(image_link)
+        ext = os.path.splitext(parsed.path)[1]
+        if not ext:
+            ctype = resp.headers.get("content-type", "")
+            if "jpeg" in ctype or "jpg" in ctype:
+                ext = ".jpg"
+            elif "png" in ctype:
+                ext = ".png"
+            elif "webp" in ctype:
+                ext = ".webp"
+            else:
+                ext = ".png"
+
+        fname = f"img2vid{ext}"
+        input_dir = rf"C:\Users\main\Documents\ComfyUI\input"
+        os.makedirs(input_dir, exist_ok=True)
+        out_path = os.path.join(input_dir, fname)
+
+        with open(out_path, "wb") as f:
+            for chunk in resp.iter_content(8192):
+                if chunk:
+                    f.write(chunk)
+
+        # Tell the prompt to use the downloaded file (ComfyUI expects the filename)
+        prompt["52"]["inputs"]["image"] = fname
+        print(f"Downloaded image to {out_path}")
+    except Exception as e:
+        print(f"Failed to download image: {e}")
+    try:
+        prompt["52"]["inputs"]["image"] = 'img2vid.png'
+        today = datetime.now().strftime("%Y-%m-%d")
+        prompt["77"]["inputs"]["filename_prefix"] = f'Video/{today}/140806'
+        p = {"prompt": prompt, "client_id": client_id}
+        data = json.dumps(p).encode('utf-8')
+        req = request.Request(f"http://127.0.0.1:8188/prompt", data=data)
+        prompt_id = json.loads(request.urlopen(req).read())['prompt_id']
+        ws = websocket.WebSocket()
+        ws.connect(f"ws://127.0.0.1:8188/ws?clientId={client_id}")
+        # Ensure all referenced node IDs exist and are correct
+        # For example, check that all "model", "positive", "negative", "vae", "image" references point to valid node IDs
+        # If you change the image or prompt, make sure downstream nodes are updated accordingly
+
+
+
+        while True:
+            out = ws.recv()
+            if isinstance(out, str):
+                message = json.loads(out)
+                if message['type'] == 'executing':
+                    data = message['data']
+                    if data['node'] is None and data['prompt_id'] == prompt_id:
+                        today = datetime.now().strftime("%Y-%m-%d")
+                        output_dir = rf"C:\Users\main\Documents\ComfyUI\output\Video\{today}"
+
+                        videos = []
+                        files = get_newest_files(output_dir, 1)  # your helper
+                        for path in files:
+                            try:
+                                f = open(path, "rb")
+                                for path in files:
+                                    f = open(path, "rb")
+                                    mime = "video/mp4" if path.lower().endswith(('.mp4', '.mov', '.mkv', '.webm')) else "application/octet-stream"
+                                    videos.append(("images", (os.path.basename(path), f, mime)))
+                                    print(videos)
+                                # upload videos (submit_results expects same tuple shape as images)
+                                submit_results([videos[0]], channel_id, requester, job_id, str(prompt) if not isinstance(prompt, str) else prompt, "Video")
+                                ws.close()
+                            except:
+                                break
+                        break  # Execution complete
+            else:
+                # Binary data (preview images)
+                continue
+    except:
+        print("An error occured, relogging in 15 seconds...")
+        time.sleep(15)
+        worker_login()
+
+
+    
 def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, resolution, batch_size, job_id, requester):
     payload = {
         "init_images": [image_link],
@@ -619,12 +994,12 @@ def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, reso
         "negative_prompt": negative_prompt,
         "sampler_name": "Euler",
         "sd_model_checkpoint": checkpoint,
-        "width": int(resolution.split("x")[0]),
-        "height": int(resolution.split("x")[1]),
+        "width": int(resolution.lower().split("x")[0]),
+        "height": int(resolution.lower().split("x")[1]),
         "batch_size": batch_size,
         "steps": 25,
         "cfg_scale": 5,
-        "denoising_strength": 0.75,
+        "denoising_strength": 0.6,
         "alwayson_scripts": {
             "ADetailer": {
             "args": [
@@ -676,7 +1051,13 @@ def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, reso
                 }
             ]
             }
-        }
+        },
+        "scheduler": "Automatic",
+        "enable_hr": True,
+        "hr_upscaler": "R-ESRGAN 4x+",
+        "hr_checkpoint_name": "Use same checkpoint",
+        "hr_cfg": 1,
+        "hr_scale": 1.5,
         }
     response = requests.post(url=f'http://127.0.0.1:7860/sdapi/v1/img2img', json=payload)
 
@@ -686,6 +1067,6 @@ def img2imggen(image_link, channel_id, checkpoint, prompt, negative_prompt, reso
     image.save('output.png')
     files = [('images', ('output.png', open('output.png', 'rb'), 'image/png'))]
     submit_results(files,channel_id,requester,job_id,prompt,"Img2Img")
-    os.remove("output.png")
+
 
 load_user_interface()
