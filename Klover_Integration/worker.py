@@ -62,7 +62,7 @@ def load_user_interface():
     aria2_path            = aria2_path            if 'aria2_path' in globals() else ""
     output_directory      = output_directory      if 'output_directory' in globals() else ""
 
-    # Load config if it exists
+    # Load config if it existss
     if os.path.exists("worker_config.json"):
         try:
             with open("worker_config.json", "r") as config_file:
