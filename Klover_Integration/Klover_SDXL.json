@@ -1,0 +1,266 @@
+{
+  "4": {
+    "inputs": {
+      "ckpt_name": "lunarcherrymix_v23.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint - BASE"
+    }
+  },
+  "5": {
+    "inputs": {
+      "width": 840,
+      "height": 1312,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "19": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "77",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "56": {
+    "inputs": {
+      "upscale_by": 1.5,
+      "seed": 777996003305655,
+      "steps": 15,
+      "cfg": 5,
+      "sampler_name": "euler",
+      "scheduler": "karras",
+      "denoise": 0.4,
+      "mode_type": "None",
+      "tile_width": 768,
+      "tile_height": 768,
+      "mask_blur": 8,
+      "tile_padding": 32,
+      "seam_fix_mode": "Half Tile + Intersections",
+      "seam_fix_denoise": 1,
+      "seam_fix_width": 64,
+      "seam_fix_mask_blur": 12,
+      "seam_fix_padding": 16,
+      "force_uniform_tiles": false,
+      "tiled_decode": true,
+      "image": [
+        "72",
+        0
+      ],
+      "model": [
+        "63",
+        0
+      ],
+      "positive": [
+        "96",
+        0
+      ],
+      "negative": [
+        "97",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ],
+      "upscale_model": [
+        "79",
+        0
+      ]
+    },
+    "class_type": "UltimateSDUpscaleCustomSample",
+    "_meta": {
+      "title": "Ultimate SD Upscale (Custom Sample)"
+    }
+  },
+  "63": {
+    "inputs": {
+      "PowerLoraLoaderHeaderWidget": {
+        "type": "PowerLoraLoaderHeaderWidget"
+      },
+      "lora_1": {
+        "on": true,
+        "lora": "character\\Marci Illustrious.safetensors",
+        "strength": 1
+      },
+      "➕ Add Lora": "",
+      "model": [
+        "4",
+        0
+      ],
+      "clip": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "Power Lora Loader (rgthree)",
+    "_meta": {
+      "title": "Power Lora Loader (rgthree)"
+    }
+  },
+  "72": {
+    "inputs": {
+      "samples": [
+        "98",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "75": {
+    "inputs": {
+      "pixels": [
+        "56",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "76": {
+    "inputs": {
+      "seed": 777996003305655,
+      "steps": 20,
+      "cfg": 5,
+      "sampler_name": "euler",
+      "scheduler": "karras",
+      "denoise": 0.4,
+      "mask_blur": 0,
+      "mask_type": "face",
+      "mask_control": "erode",
+      "dilate_mask_value": 3,
+      "erode_mask_value": 3,
+      "model": [
+        "63",
+        0
+      ],
+      "positive": [
+        "96",
+        0
+      ],
+      "negative": [
+        "97",
+        0
+      ],
+      "latent_image": [
+        "75",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "DZ_Face_Detailer",
+    "_meta": {
+      "title": "DZ_Face_Detailer"
+    }
+  },
+  "77": {
+    "inputs": {
+      "samples": [
+        "76",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "79": {
+    "inputs": {
+      "model_name": "RealESRGAN_x4plus.pth"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "Load Upscale Model"
+    }
+  },
+  "96": {
+    "inputs": {
+      "text": "highest quality, masterpiece, absurdres, Marci, medium breasts, naked, missionary sex ",
+      "clip": [
+        "63",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "97": {
+    "inputs": {
+      "text": "text, watermark, poorly drawn, bad anatomy",
+      "clip": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "98": {
+    "inputs": {
+      "add_noise": "enable",
+      "noise_seed": 777996003305655,
+      "steps": 30,
+      "cfg": 5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 0,
+      "end_at_step": 10000,
+      "return_with_leftover_noise": "disable",
+      "model": [
+        "63",
+        0
+      ],
+      "positive": [
+        "96",
+        0
+      ],
+      "negative": [
+        "97",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "KSamplerAdvanced",
+    "_meta": {
+      "title": "KSampler (Advanced)"
+    }
+  }
+}

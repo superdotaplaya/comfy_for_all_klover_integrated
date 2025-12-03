@@ -38,6 +38,8 @@ auto_dl_checkpoints = True
 output_directory = "F:\\stable-diffusion-webui-reForge\\outputs\\txt2img-images"
 worker_type = "forge"
 worker_main_loop = None
+worker_name = "TBD"
+
 
 def run_app():
     check_checkpoint_hashes()
@@ -46,7 +48,7 @@ def run_app():
     # Start the first execution
     main_loop()
 def load_user_interface():
-    global forge_model_directory, lora_model_directory, server_url, civit_api_token, auto_dl_lora, auto_dl_checkpoints, aria2_path, output_directory
+    global forge_model_directory, lora_model_directory, server_url, civit_api_token, auto_dl_lora, auto_dl_checkpoints, aria2_path, output_directory, accepted_job_types, worker_name
     root = tk.Tk()
     root.title("Forge SD Worker")
 
@@ -61,8 +63,9 @@ def load_user_interface():
     civit_api_token       = civit_api_token       if 'civit_api_token' in globals() else ""
     aria2_path            = aria2_path            if 'aria2_path' in globals() else ""
     output_directory      = output_directory      if 'output_directory' in globals() else ""
+    worker_name         = worker_name          if 'worker_name' in globals() else "TBD" 
 
-    # Load config if it existss
+    # Load config if it exists
     if os.path.exists("worker_config.json"):
         try:
             with open("worker_config.json", "r") as config_file:
@@ -73,8 +76,11 @@ def load_user_interface():
                 civit_api_token       = config.get("civit_api_token", civit_api_token)
                 aria2_path            = config.get("aria2_path", aria2_path)
                 output_directory      = config.get("output_directory", output_directory)
+                worker_name           = config.get("worker_name", worker_name)
                 auto_dl_lora.set(config.get("auto_dl_lora", False))
                 auto_dl_checkpoints.set(config.get("auto_dl_checkpoints", False))
+                # Load acceptable job types from config if present so UI reflects current selections
+                accepted_job_types = config.get("accepted_job_types", accepted_job_types)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load config:\n{e}")
 
@@ -82,6 +88,11 @@ def load_user_interface():
     frm.grid()
 
     # Labels and Inputs
+    ttk.Label(frm, text="Worker Name:").grid(column=0, row=0, sticky="w")
+    Worker_Name = ttk.Entry(frm, width=100)
+    Worker_Name.insert(0, worker_name)
+    Worker_Name.grid(column=1, row=0)
+
     ttk.Label(frm, text="Forge Model Directory:").grid(column=0, row=1, sticky="w")
     SD_Model_Directory = ttk.Entry(frm, width=100)
     SD_Model_Directory.insert(0, forge_model_directory)
@@ -120,17 +131,57 @@ def load_user_interface():
     Auto_DL_Checkpoints = ttk.Checkbutton(frm, variable=auto_dl_checkpoints)
     Auto_DL_Checkpoints.grid(column=1, row=8, sticky="w")
 
-    # Save button
-    ttk.Button(frm, text="Save Settings", command=lambda: save_settings(
-        SD_Model_Directory.get(),
-        Lora_Model_Directory.get(),
-        Server_URL.get(),
-        Civit_API_Token.get(),
-        Aria2_Path.get(),
-        Output_Directory.get(),
-        auto_dl_lora.get(),
-        auto_dl_checkpoints.get()
-    )).grid(column=1, row=9)
+    # Acceptable job types multi-select
+    ttk.Label(frm, text="Acceptable Job Types:").grid(column=0, row=9, sticky="nw")
+    job_options = ["txt2img", "upscale", "face fix", "img2img", "img2vid"]
+    job_listbox = tk.Listbox(frm, selectmode='multiple', height=len(job_options), exportselection=False)
+    for opt in job_options:
+        job_listbox.insert(tk.END, opt)
+    job_listbox.grid(column=1, row=9, sticky="w")
+
+    # Map user-facing labels to internal job identifiers used by the worker/server
+    label_to_internal = {
+        "txt2img": "generate",
+        "upscale": "upscale",
+        "face fix": "face fix",
+        "img2img": "img2img",
+        "img2vid": "img2vid"
+    }
+
+    # Pre-select entries based on current accepted_job_types
+    try:
+        for idx, label in enumerate(job_options):
+            internal = label_to_internal.get(label)
+            if internal in accepted_job_types:
+                job_listbox.selection_set(idx)
+    except Exception:
+        pass
+
+    # Helpers to apply selections
+    def apply_job_selection():
+        global accepted_job_types
+        sel = job_listbox.curselection()
+        selected_labels = [job_listbox.get(i) for i in sel]
+        # Map labels to internal names and update global
+        accepted_job_types = [label_to_internal[l] for l in selected_labels]
+
+    # Save button (updates accepted_job_types before saving)
+    def save_and_update():
+        apply_job_selection()
+        save_settings(
+            SD_Model_Directory.get(),
+            Lora_Model_Directory.get(),
+            Server_URL.get(),
+            Civit_API_Token.get(),
+            Aria2_Path.get(),
+            Output_Directory.get(),
+            auto_dl_lora.get(),
+            auto_dl_checkpoints.get(),
+            Worker_Name.get()
+        )
+        messagebox.showinfo("Saved", f"Acceptable job types set to: {accepted_job_types}")
+
+    ttk.Button(frm, text="Save Settings", command=save_and_update).grid(column=1, row=10)
 
     # Update globals with current entries so values are available immediately
     forge_model_directory = SD_Model_Directory.get()
@@ -139,15 +190,20 @@ def load_user_interface():
     civit_api_token = Civit_API_Token.get()
     aria2_path = Aria2_Path.get()
     output_directory = Output_Directory.get()
+    worker_name = Worker_Name.get()
 
     # Start / Quit buttons
-    ttk.Button(frm, text="Start Worker!", command=run_app).grid(column=1, row=11)
+    def start_worker():
+        apply_job_selection()
+        run_app()
+
+    ttk.Button(frm, text="Start Worker!", command=start_worker).grid(column=1, row=11)
     ttk.Button(frm, text="Quit", command=root.destroy).grid(column=1, row=12)
 
     root.mainloop()
 
-def save_settings(forge_model_dir, lora_model_dir, server, token, aria2, out_dir, dl_lora, dl_checkpoints):
-    global forge_model_directory, lora_model_directory, server_url, civit_api_token, aria2_path, output_directory, auto_dl_lora, auto_dl_checkpoints
+def save_settings(forge_model_dir, lora_model_dir, server, token, aria2, out_dir, dl_lora, dl_checkpoints, worker):
+    global forge_model_directory, lora_model_directory, server_url, civit_api_token, aria2_path, output_directory, auto_dl_lora, auto_dl_checkpoints, accepted_job_types, worker_name
     config = {
         "forge_model_directory": forge_model_dir,
         "lora_model_directory": lora_model_dir,
@@ -156,7 +212,9 @@ def save_settings(forge_model_dir, lora_model_dir, server, token, aria2, out_dir
         "aria2_path": aria2,
         "output_directory": out_dir,
         "auto_dl_lora": dl_lora,
-        "auto_dl_checkpoints": dl_checkpoints
+        "auto_dl_checkpoints": dl_checkpoints,
+        "accepted_job_types": accepted_job_types,
+        "worker_name": worker
     }
     forge_model_directory = forge_model_dir
     lora_model_directory = lora_model_dir
@@ -164,6 +222,7 @@ def save_settings(forge_model_dir, lora_model_dir, server, token, aria2, out_dir
     civit_api_token = token
     aria2_path = aria2
     output_directory = out_dir
+    worker_name = worker
     try:
         with open("worker_config.json", "w") as config_file:
             json.dump(config, config_file, indent=4)
@@ -264,25 +323,35 @@ def worker_login():
     global accepted_job_types
     global auto_dl_lora
     global auto_dl_checkpoints
+    global worker_name
     print("🛜🛜 Attempting to login... NOTE: This may take a bit if you have a lot of models installed! 🛜🛜")
+    checkpoint_hashes_list = []
+    lora_hashes_list = []
+    raw_checkpoint_hashes = load_hashes("checkpoints")
+    raw_lora_hashes = load_hashes("loras")
     try:
         with open("worker_auth.json", "rb") as worker_auth_file:
             worker_id = json.load(worker_auth_file).get('worker_id')
-            checkpoint_hashes_list = []
-            lora_hashes_list = []
-            raw_checkpoint_hashes = load_hashes("checkpoints")
-            raw_lora_hashes = load_hashes("loras")
-            for hash in raw_checkpoint_hashes:
+            try:
+                for hash in raw_checkpoint_hashes:
                     checkpoint_hashes_list.append(hash[0])
-            for hash in raw_lora_hashes:
+                for hash in raw_lora_hashes:
                     lora_hashes_list.append(hash[0])
-            resp = requests.get(f'{server_url}/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list, 'dl_lora':auto_dl_lora.get(), 'dl_checkpoint': auto_dl_checkpoints.get()}, timeout=5)
-            if not resp.json().get("created"):
+                resp = requests.get(f'{server_url}/api/init', json = {'worker_id': worker_id, 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list, 'dl_lora':auto_dl_lora.get(), 'dl_checkpoint': auto_dl_checkpoints.get(), 'worker_name': worker_name}, timeout=5)
                 print(f"Worker authenticated successfully! Acceptable Job Types: {accepted_job_types}")
+                return
+            except:
+                print("Unable to connect to the server, retrying in 15 seconds...")
+                time.sleep(15)
+                worker_login()
     except:
-        print("Unable to connect to the server, retrying in 15 seconds...")
-        time.sleep(15)
+        worker_id = None
+        resp = requests.get(f'{server_url}/api/init', json = {'worker_id': "N/A", 'checkpoints':checkpoint_hashes_list, 'acceptable_job_types':accepted_job_types, 'loras':lora_hashes_list, 'dl_lora':auto_dl_lora.get(), 'dl_checkpoint': auto_dl_checkpoints.get(), 'worker_name': worker_name}, timeout=5)
+        worker_id = resp.json().get("worker_id")
+        json.dump({'worker_id': worker_id}, open('worker_auth.json', 'w'), indent=4)
+        print(f"New worker registered, worker ID: {worker_id}")
         worker_login()
+
 
 # JOB PROCESSING BELOW
 def get_job():
@@ -301,20 +370,22 @@ def get_job():
             requester = job['requester']
             download_hash = resp.json()['status'].split(': ')[1]
             print(download_hash)
-            try:
-                resp1 = requests.get(f'https://civitai.com/api/v1/model-versions/by-hash/{download_hash}')
-                resp_dict = resp1.json()
-                print(resp_dict)
-                style_id = resp_dict['id']
-                url = f"https://civitai.com/api/download/models/{style_id}?token={civit_api_token}"
-                os.system(f"{aria2_path}/aria2c.exe -d {forge_model_directory} {url} --conf {aria2_path}/config.cfg")
-                resp2 = requests.post('http://127.0.0.1:7860/sdapi/v1/refresh-checkpoints')
-                check_checkpoint_hashes()
-                return
-            except:
+            '''try:'''
+            resp1 = requests.get(f'https://civitai.com/api/v1/model-versions/by-hash/{download_hash}')
+            resp_dict = resp1.json()
+            print(resp_dict)
+            style_id = resp_dict['id']
+            url = f"https://civitai.com/api/download/models/{style_id}?token={civit_api_token}"
+            os.system(f"{aria2_path}/aria2c.exe -d {forge_model_directory} {url} --conf {aria2_path}/config.cfg --allow-overwrite=true")
+            resp2 = requests.post('http://127.0.0.1:7860/sdapi/v1/refresh-checkpoints')
+            check_checkpoint_hashes()
+            time.sleep(5)
+            worker_login()
+            return
+            '''except:
 
                     resp = requests.get(f'{server_url}/api/download-fail', json = {'worker_id': worker_id, 'job_id': job_id, 'requester': requester, 'channel': channel_id})
-            return
+            return'''
         if resp.status_code == 202:
             job = resp.json()
             job_id     = job['job_id']
@@ -330,7 +401,7 @@ def get_job():
                     print(resp_dict)
                     style_id = resp_dict['id']
                     url = f"https://civitai.com/api/download/models/{style_id}?token={civit_api_token}"
-                    os.system(f"{aria2_path}/aria2c.exe -d {lora_model_directory} {url} --conf {aria2_path}/config.cfg")
+                    os.system(f"{aria2_path}/aria2c.exe -d {lora_model_directory} {url} --conf {aria2_path}/config.cfg --allow-overwrite=true")
                     resp = requests.post('http://127.0.0.1:7860/sdapi/v1/refresh-loras')
                     check_lora_hashes()
                     print("Relogging to update available models and job types!")
@@ -347,12 +418,15 @@ def get_job():
             pass
         """try:"""
         job = resp.json()          # now a dict!
-        job_type   = job['request_type']
-        job_id     = job['job_id']
-        prompt     = job['requested_prompt']
-        prompt = lora_conversion(prompt)
-        print(prompt)
-        channel_id = job['channel']
+        try:
+            job_type   = job['request_type']
+            job_id     = job['job_id']
+            prompt     = job['requested_prompt']
+            prompt = lora_conversion(prompt)
+            print(prompt)
+            channel_id = job['channel']
+        except:
+            print("recieved bad request, retrying in 15 seconds...")
         if job_type != "img2vid":
             model_hash = hash_to_model_name(job['model'],"checkpoints")
             steps      = job['steps']
@@ -595,7 +669,8 @@ def generate_image(channel_id,
     # 6) Grab today’s folder
     today = datetime.now().strftime("%Y-%m-%d")
     output_dir = fr"{output_directory}\\{today}"
-    grid_dir = fr"{'\\'.join(output_directory.split('\\')[:3])}\txt2img-grids\{today}"
+    backslash_character = "\\"
+    grid_dir = fr"{backslash_character.join(output_directory.split(backslash_character)[:3])}\txt2img-grids\{today}"
     print(grid_dir)
     images = []
     grid_files = get_newest_files(grid_dir,batch_size)
@@ -711,6 +786,8 @@ def generate_image_comfy(channel_id, user_prompt, model_hash, neg_prompt,
             resolution, job_type, batch_size,
             cfg_scale, steps, job_id, requester, sampler, clip_skip, face_fix, hires_fix):
          # Get prompt_id for tracking the execution
+    if sampler.lower() == "dpm2":
+        sampler = "dpm_2"
     client_id = str(uuid.uuid4())  # Generate a unique client ID
     seed = random.randint(1, 999999999999999)
     loras = re.findall(r"<.*?>", user_prompt)
@@ -720,7 +797,7 @@ def generate_image_comfy(channel_id, user_prompt, model_hash, neg_prompt,
         lora = lora.replace("<","").replace(">","").split(":")
         completed_loras.append([True,lora[1],lora[2]])
     for lora in neg_loras:
-        lora = lora.replace("<").replace(">").split(":")
+        lora = lora.replace("<","").replace(">","").split(":")
         completed_loras.append([False,lora[1],lora[2]])
     user_prompt = re.sub(r"<.*?>", "", user_prompt)
     neg_prompt = re.sub(r"<.*?>", "", neg_prompt)
@@ -728,19 +805,21 @@ def generate_image_comfy(channel_id, user_prompt, model_hash, neg_prompt,
     prompt = json.load(open("Klover_SDXL.json", "r", encoding="utf-8"))
     for lora in completed_loras :
         prompt['63']['inputs'][f'lora_{i}'] = {'on': True, 'lora': f'{lora[1]}.safetensors', 'strength': float(lora[2])}
+        i+= 1
     prompt['5']['inputs']['width'] = int(resolution.lower().split('x')[0])
     prompt['5']['inputs']['height'] = int(resolution.lower().split('x')[1])
-    prompt["5"]["inputs"]["batch_size"] = batch_size
-    prompt['6']['inputs']['text'] = user_prompt
-    prompt['7']['inputs']['text'] = neg_prompt
+    prompt['5']["inputs"]["batch_size"] = batch_size
+    prompt['96']['inputs']['text'] = user_prompt
+    prompt['97']['inputs']['text'] = neg_prompt
     prompt['4']['inputs']['ckpt_name'] = model_hash
-    prompt['58']['inputs']['steps'] = steps
-    prompt['58']['inputs']['sampler_name'] = sampler.lower()
-    prompt['58']['inputs']['seed'] = seed
-    prompt['97']['inputs']['seed'] = seed
-    prompt['97']['inputs']['cfg'] = cfg_scale
-    prompt['93']['inputs']['seed'] = seed
-    prompt['93']['inputs']['cfg'] = cfg_scale
+    prompt['98']['inputs']['steps'] = steps
+    prompt['98']['inputs']['sampler_name'] = sampler.lower()
+    prompt['98']['inputs']['noise_seed'] = seed
+    prompt['98']['inputs']['cfg'] = cfg_scale
+    prompt['76']['inputs']['seed'] = seed
+    prompt['76']['inputs']['cfg'] = cfg_scale
+    prompt['56']['inputs']['seed'] = seed
+    prompt['56']['inputs']['cfg'] = cfg_scale
     print(prompt)
     #set the text prompt for our positive CLIPTextEncode
     p = {"prompt": prompt, "client_id": client_id}
