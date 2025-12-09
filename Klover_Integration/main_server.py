@@ -85,28 +85,27 @@ def login():
         worker_hashes[worker_id] = data.get("checkpoints")
         worker_job_types[worker_id] = data.get("acceptable_job_types")
 
-        with open('worker_list.json', 'w') as f:
-            json.dump({'workers': worker_dict}, f, indent=4)
+
+        json.dump({'workers': worker_dict}, open('worker_list.json', 'w'), indent=4)
 
         return jsonify({"worker_id": worker_id, "worker_name": worker_name, "created": True})
 
     else:
         if authenticate_worker(worker_id):
             worker_dict[worker_id] = {"worker_name": worker_name}
-
+            
             worker_hashes[worker_id] = data.get("checkpoints")
             lora_hashes[worker_id] = data.get("loras")
             download_handling[worker_id] = {
-                'lora': data.get("dl_lora"),
-                'checkpoints': data.get('dl_checkpoint')
+            'lora': data.get("dl_lora"),
+            'checkpoints': data.get('dl_checkpoint')
             }
             worker_job_types[worker_id] = data.get("acceptable_job_types")
 
             thread = threading.Thread(target=update_hashes_sheet, args=(worker_hashes[worker_id], lora_hashes[worker_id]))
             thread.start()
 
-            with open('worker_list.json', 'w') as f:
-                json.dump({'workers': worker_dict}, f, indent=4)
+            json.dump({'workers': worker_dict}, open('worker_list.json', 'w'), indent=4)
 
             return jsonify({"worker_id": worker_id, "worker_name": worker_name, "created": False})
 
@@ -334,7 +333,8 @@ def get_job():
                     "channel": channel_id,
                     "request_type": job_type,
                     "image_link": image_link,
-                    "requester": requester
+                    "requester": requester,
+                    "config_scale": cfg_scale # Using config_scale field to pass video length
                 }
                 return jsonify(result)
         return jsonify({'status': 'No job found'}), 500
@@ -506,7 +506,7 @@ async def update_leaderboard_message(completed_jobs):
         sorted_leaderboard = sorted(job_counts.items(), key=lambda x: x[1], reverse=True)
 
         # Build leaderboard text
-        leaderboard_text = "**🏆 Klover Leaderboard 🏆**\n\n"
+        leaderboard_text = "**🏆 Klover Leaderboard 🏆**\n\nThank you to each and every person contributing their computer's power to giving others the ability to run AI workloads!\n\n"
         rank = 1
         for user_id, count in sorted_leaderboard:
             # Look up worker name, fall back to ID if not found
@@ -564,7 +564,7 @@ async def img2img(ctx, image: Option(discord.Attachment, "What image are you goi
 async def models(ctx):
     print("sharing models")
 @bot.slash_command(description = "Generate an AI video from an image!")
-async def img2vid(ctx, image: Option(discord.Attachment, "What image are you going to fuse?"), prompt: Option(str, "What prompt are you going to use?")):
+async def img2vid(ctx, image: Option(discord.Attachment, "What image are you going to fuse?"), prompt: Option(str, "What prompt are you going to use?"), length: Option(int, "How long do you want the video to be? (in seconds)", default = 5, choices=[5,6,7,8], required = False)):
     print("img2vid")
 @bot.slash_command(description = "Download a style for use with the bot")
 async def facefix(ctx, image: Option(discord.Attachment, "What image are you going to face fix?"), prompt: Option(str, "What prompt do you want to run for face fix?"), checkpoint_hash: Option(str, "What checkpoint do you want to sue for face fix? (check /models for a full list!)")):

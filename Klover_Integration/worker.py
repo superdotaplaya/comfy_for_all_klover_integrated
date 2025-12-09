@@ -433,7 +433,7 @@ def get_job():
             neg_prompt = job.get('negative_prompt', "")
             resolution = job.get('resolution')
             batch_size = job.get('batch_size')
-            cfg_scale  = job.get('config_scale')
+            cfg_scale  = job.get('cfg_scale')
             sampler = job.get('sampler', "Euler")
             clip_skip = job.get('clip_skip', 2)
             face_fix = job.get('face_fix', "False")
@@ -472,7 +472,8 @@ def get_job():
             elif worker_type == "comfy":
                 img2img_comfy(image_link,channel_id,model_hash,prompt,neg_prompt,resolution,batch_size, job_id, requester)
         elif job_type == "img2vid":
-            img2vidgen(image_link,channel_id,prompt, job_id, requester)
+            cfg_scale = job.get('config_scale')
+            img2vidgen(image_link,channel_id,prompt, job_id, requester, cfg_scale)
     except requests.RequestException as e:
         print(f"Unable to connect to server, relogging in 15 seconds...")
         worker_login()
@@ -970,7 +971,7 @@ def img2img_comfy(image_link, channel_id, checkpoint, user_prompt, negative_prom
 
 
 
-def img2vidgen(image_link,channel_id,user_prompt, job_id, requester):
+def img2vidgen(image_link,channel_id,user_prompt, job_id, requester, vid_length):
 
         # Get prompt_id for tracking the execution
     client_id = str(uuid.uuid4())  # Generate a unique client ID
@@ -1018,6 +1019,7 @@ def img2vidgen(image_link,channel_id,user_prompt, job_id, requester):
         prompt["52"]["inputs"]["image"] = 'img2vid.png'
         today = datetime.now().strftime("%Y-%m-%d")
         prompt["77"]["inputs"]["filename_prefix"] = f'Video/{today}/140806'
+        prompt["50"]["inputs"]["length"] = vid_length*16
         p = {"prompt": prompt, "client_id": client_id}
         data = json.dumps(p).encode('utf-8')
         req = request.Request(f"http://127.0.0.1:8188/prompt", data=data)
